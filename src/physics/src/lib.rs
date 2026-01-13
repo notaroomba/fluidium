@@ -637,6 +637,136 @@ impl Universe {
         }
     }
 
+    // Expand the grid in a specific direction if needed
+    // Returns true if expanded
+    pub fn expand_grid_if_needed(&mut self) -> bool {
+        if self.fluid.is_none() {
+            return false;
+        }
+
+        let margin = 5; // cells margin before expansion
+        let expand_amount = 20; // cells to add when expanding
+        
+        let (min_i, max_i, min_j, max_j, num_x, num_y, density, h) = {
+            let f = self.fluid.as_ref().unwrap();
+            let n = f.num_y;
+            
+            let mut min_i = f.num_x;
+            let mut max_i = 0usize;
+            let mut min_j = f.num_y;
+            let mut max_j = 0usize;
+            let mut has_content = false;
+
+            // Find bounds of particles (smoke) and walls
+            for i in 0..f.num_x {
+                for j in 0..f.num_y {
+                    let has_smoke = f.m[i * n + j] < 0.99;
+                    let is_wall = f.s[i * n + j] == 0.0;
+                    
+                    if has_smoke || is_wall {
+                        min_i = min_i.min(i);
+                        max_i = max_i.max(i);
+                        min_j = min_j.min(j);
+                        max_j = max_j.max(j);
+                        has_content = true;
+                    }
+                }
+            }
+
+            if !has_content {
+                return false;
+            }
+
+            (min_i, max_i, min_j, max_j, f.num_x, f.num_y, f.density, f.h)
+        };
+
+        // Check which directions need expansion
+        let expand_left = min_i < margin;
+        let expand_right = max_i > num_x - margin - 1;
+        let expand_bottom = min_j < margin;
+        let expand_top = max_j > num_y - margin - 1;
+
+        if !expand_left && !expand_right && !expand_bottom && !expand_top {
+            return false;
+        }
+
+        // Calculate new dimensions
+        let add_left = if expand_left { expand_amount } else { 0 };
+        let add_right = if expand_right { expand_amount } else { 0 };
+        let add_bottom = if expand_bottom { expand_amount } else { 0 };
+        let add_top = if expand_top { expand_amount } else { 0 };
+
+        let new_num_x = num_x + add_left + add_right;
+        let new_num_y = num_y + add_bottom + add_top;
+        let new_num_cells = new_num_x * new_num_y;
+
+        // Get old fluid data
+        let old_fluid = self.fluid.take().unwrap();
+        let old_n = old_fluid.num_y;
+        let new_n = new_num_y;
+
+        // Create new fluid arrays
+        let mut new_u = vec![0.0f32; new_num_cells];
+        let mut new_v = vec![0.0f32; new_num_cells];
+        let mut new_p = vec![0.0f32; new_num_cells];
+        let mut new_s = vec![1.0f32; new_num_cells]; // All fluid by default
+        let mut new_m = vec![1.0f32; new_num_cells];
+
+        // Copy old data to new arrays with offset
+        for old_i in 0..old_fluid.num_x {
+            for old_j in 0..old_fluid.num_y {
+                let new_i = old_i + add_left;
+                let new_j = old_j + add_bottom;
+                
+                if new_i < new_num_x && new_j < new_num_y {
+                    let old_idx = old_i * old_n + old_j;
+                    let new_idx = new_i * new_n + new_j;
+                    
+                    new_u[new_idx] = old_fluid.u[old_idx];
+                    new_v[new_idx] = old_fluid.v[old_idx];
+                    new_p[new_idx] = old_fluid.p[old_idx];
+                    new_s[new_idx] = old_fluid.s[old_idx];
+                    new_m[new_idx] = old_fluid.m[old_idx];
+                }
+            }
+        }
+
+        // Create new fluid struct
+        let new_fluid = Fluid {
+            density,
+            num_x: new_num_x,
+            num_y: new_num_y,
+            num_cells: new_num_cells,
+            h,
+            u: new_u.clone(),
+            v: new_v.clone(),
+            new_u,
+            new_v,
+            p: new_p,
+            s: new_s,
+            m: new_m.clone(),
+            new_m,
+        };
+
+        self.fluid = Some(new_fluid);
+
+        // Update emitter position (relative to new grid)
+        if add_left > 0 || add_bottom > 0 {
+            let old_width = num_x as f32;
+            let old_height = num_y as f32;
+            let new_width = new_num_x as f32;
+            let new_height = new_num_y as f32;
+            
+            let abs_x = self.emitter_x * old_width;
+            let abs_y = self.emitter_y * old_height;
+            self.emitter_x = (abs_x + add_left as f32) / new_width;
+            self.emitter_y = (abs_y + add_bottom as f32) / new_height;
+        }
+
+        true
+    }
+
+    // ...existing code...
     pub fn set_obstacle(&mut self, x: f32, y: f32, reset: bool) {
         let mut vx = 0.0_f32;
         let mut vy = 0.0_f32;
@@ -681,6 +811,9 @@ impl Universe {
 
     pub fn simulate(&mut self) {
         if !self.paused {
+            // Expand grid if particles/walls are near the edges
+            self.expand_grid_if_needed();
+            
             // Get current particle count before mutable borrow
             let current_particles = self.get_particle_count();
             let emitter_enabled = self.emitter_enabled;
