@@ -66,6 +66,8 @@ pub struct Fluid {
     s: Vec<f32>,
     m: Vec<f32>,
     new_m: Vec<f32>,
+    // Age tracking for particles (frame number when smoke was added, 0 = no smoke)
+    particle_age: Vec<u32>,
 }
 
 impl Fluid {
@@ -91,6 +93,7 @@ impl Fluid {
             s: vec![0.0; num_cells],
             m,
             new_m: vec![0.0; num_cells],
+            particle_age: vec![0; num_cells],
         }
     }
 
@@ -248,6 +251,7 @@ impl Fluid {
 
     pub fn advect_smoke(&mut self, dt: f32) {
         self.new_m.copy_from_slice(&self.m);
+        let mut new_particle_age = self.particle_age.clone();
 
         let n = self.num_y;
         let h = self.h;
@@ -262,10 +266,23 @@ impl Fluid {
                     let y = (j as f32) * h + h2 - dt * v;
 
                     self.new_m[i * n + j] = self.sample_field(x, y, S_FIELD);
+
+                    // Also advect particle age - get the age from the source cell
+                    // Find the source cell indices
+                    let src_i = ((x / h).floor() as usize).clamp(1, self.num_x - 2);
+                    let src_j = ((y / h).floor() as usize).clamp(1, self.num_y - 2);
+                    let src_idx = src_i * n + src_j;
+
+                    // If the source cell has smoke with a valid age, transfer it
+                    // Otherwise keep the current age
+                    if self.m[src_idx] < 0.99 && self.particle_age[src_idx] > 0 {
+                        new_particle_age[i * n + j] = self.particle_age[src_idx];
+                    }
                 }
             }
         }
         self.m.copy_from_slice(&self.new_m);
+        self.particle_age = new_particle_age;
     }
 
     // Enforce boundary conditions - zero velocities at solid boundaries
@@ -329,6 +346,83 @@ impl Fluid {
     pub fn get_m(&self, i: usize, j: usize) -> f32 {
         let n = self.num_y;
         self.m[i * n + j]
+    }
+
+    /// Remove the oldest particles (smoke cells) from the simulation.
+    /// This is called when the particle count exceeds the maximum.
+    pub fn remove_oldest_particles(&mut self, count: usize) {
+        let n = self.num_y;
+
+        // Collect all cells that have smoke (m < 0.99) with their ages
+        // Only include cells that have a valid age (> 0)
+        let mut smoke_cells: Vec<(usize, usize, u32)> = Vec::new();
+
+        for i in 1..self.num_x - 1 {
+            for j in 1..self.num_y - 1 {
+                if self.m[i * n + j] < 0.99 && self.s[i * n + j] != 0.0 {
+                    let age = self.particle_age[i * n + j];
+                    // Only include particles with valid age (age > 0)
+                    // age = 0 means uninitialized, treat as newest (don't remove)
+                    if age > 0 {
+                        smoke_cells.push((i, j, age));
+                    }
+                }
+            }
+        }
+
+        if smoke_cells.is_empty() {
+            return;
+        }
+
+        // Sort by age (oldest first - lowest frame number means oldest)
+        // Particles created earlier have lower frame numbers
+        smoke_cells.sort_by_key(|&(_, _, age)| age);
+
+        // Remove the oldest particles (those with lowest frame numbers)
+        let to_remove = count.min(smoke_cells.len());
+        for (i, j, _) in smoke_cells.iter().take(to_remove) {
+            let idx = i * n + j;
+            self.m[idx] = 1.0; // Clear smoke
+            self.particle_age[idx] = 0; // Reset age
+        }
+    }
+
+    /// Remove particles that have reached the border of the grid
+    /// border_size is the thickness of the border in cells
+    pub fn remove_border_particles(&mut self, border_size: usize) {
+        let n = self.num_y;
+        let bs = border_size.max(1); // At least 1 cell border
+
+        // Clear smoke at border cells (within border_size cells of edges)
+        for i in 0..self.num_x {
+            for b in 0..bs {
+                if b < self.num_y {
+                    // Bottom rows
+                    self.m[i * n + b] = 1.0;
+                    self.particle_age[i * n + b] = 0;
+                    // Top rows
+                    if self.num_y - 1 - b < self.num_y {
+                        self.m[i * n + (self.num_y - 1 - b)] = 1.0;
+                        self.particle_age[i * n + (self.num_y - 1 - b)] = 0;
+                    }
+                }
+            }
+        }
+
+        for j in 0..self.num_y {
+            for b in 0..bs {
+                if b < self.num_x {
+                    // Left columns
+                    self.m[b * n + j] = 1.0;
+                    self.particle_age[b * n + j] = 0;
+                    // Right columns
+                    if self.num_x - 1 - b < self.num_x {
+                        self.m[(self.num_x - 1 - b) * n + j] = 1.0;
+                        self.particle_age[(self.num_x - 1 - b) * n + j] = 0;
+                    }
+                }
+            }
+        }
     }
 }
 
@@ -398,6 +492,8 @@ pub struct Universe {
     // Rendering parameters
     particle_radius: f32,
     cell_size: f32,
+    border_size: usize, // Border thickness in cells
+    grid_size: usize, // Grid resolution (number of cells per side)
 
     // Speed control
     speed: f32,
@@ -420,9 +516,9 @@ impl Universe {
             wind_x: 2.0, // Default wind from left
             wind_y: 0.0,
             emitter_enabled: true,
-            emitter_x: 0.0, // Left side emitter
-            emitter_y: 0.5, // Center height
-            emitter_radius: 0.1, // 10% of domain height
+            emitter_x: 0.5, // Center of grid
+            emitter_y: 0.5, // Center of grid
+            emitter_radius: 5.0, // Fixed radius in cells
             max_particles: 10000,
             obstacle_x: 0.0,
             obstacle_y: 0.0,
@@ -437,6 +533,8 @@ impl Universe {
             show_density: false,
             particle_radius: 4.0,
             cell_size: 10.0,
+            border_size: 1, // 1 cell thick border
+            grid_size: 100, // Default grid size (resolution)
             speed: 1.0,
             implementation: Implementation::Euler,
         };
@@ -545,8 +643,8 @@ impl Universe {
         self.fluid = Some(f);
     }
 
-    // Setup a blank canvas with no walls at all - adaptive size
-    pub fn setup_blank(&mut self, sim_width: f32, sim_height: f32) {
+    // Setup a blank canvas with fixed square size and colored border
+    pub fn setup_blank(&mut self, _sim_width: f32, _sim_height: f32) {
         self.scene_nr = 255; // Blank canvas marker
         self.obstacle_radius = 0.15;
         self.over_relaxation = 1.9;
@@ -556,31 +654,28 @@ impl Universe {
         self.wind_x = 2.0; // Default wind from left
         self.wind_y = 0.0;
 
-        // Use larger grid for more space
-        let res: usize = 100;
-        let domain_height = 1.0_f32;
-        let domain_width = (domain_height / sim_height) * sim_width;
-        let h = domain_height / (res as f32);
+        // Reset emitter to center
+        self.emitter_x = 0.5;
+        self.emitter_y = 0.5;
 
-        let num_x = (domain_width / h).floor() as usize;
-        let num_y = (domain_height / h).floor() as usize;
+        // Fixed square grid using grid_size
+        let res: usize = self.grid_size;
+        let domain_size = 1.0_f32;
+        let h = domain_size / (res as f32);
+
+        let num_x = res;
+        let num_y = res;
 
         let density = 1000.0_f32;
 
         let mut f = Fluid::new(density, num_x, num_y, h);
         let n = f.num_y;
 
-        // All cells are fluid - no boundary walls
+        // All cells are fluid - no walls (border is just visual)
         for i in 0..f.num_x {
             for j in 0..f.num_y {
                 f.s[i * n + j] = 1.0; // All fluid
             }
-        }
-
-        // Set initial velocity from wind at left edge
-        for j in 0..f.num_y {
-            f.u[1 * n + j] = self.wind_x;
-            f.v[1 * n + j] = self.wind_y;
         }
 
         self.show_pressure = false;
@@ -637,136 +732,6 @@ impl Universe {
         }
     }
 
-    // Expand the grid in a specific direction if needed
-    // Returns true if expanded
-    pub fn expand_grid_if_needed(&mut self) -> bool {
-        if self.fluid.is_none() {
-            return false;
-        }
-
-        let margin = 5; // cells margin before expansion
-        let expand_amount = 20; // cells to add when expanding
-        
-        let (min_i, max_i, min_j, max_j, num_x, num_y, density, h) = {
-            let f = self.fluid.as_ref().unwrap();
-            let n = f.num_y;
-            
-            let mut min_i = f.num_x;
-            let mut max_i = 0usize;
-            let mut min_j = f.num_y;
-            let mut max_j = 0usize;
-            let mut has_content = false;
-
-            // Find bounds of particles (smoke) and walls
-            for i in 0..f.num_x {
-                for j in 0..f.num_y {
-                    let has_smoke = f.m[i * n + j] < 0.99;
-                    let is_wall = f.s[i * n + j] == 0.0;
-                    
-                    if has_smoke || is_wall {
-                        min_i = min_i.min(i);
-                        max_i = max_i.max(i);
-                        min_j = min_j.min(j);
-                        max_j = max_j.max(j);
-                        has_content = true;
-                    }
-                }
-            }
-
-            if !has_content {
-                return false;
-            }
-
-            (min_i, max_i, min_j, max_j, f.num_x, f.num_y, f.density, f.h)
-        };
-
-        // Check which directions need expansion
-        let expand_left = min_i < margin;
-        let expand_right = max_i > num_x - margin - 1;
-        let expand_bottom = min_j < margin;
-        let expand_top = max_j > num_y - margin - 1;
-
-        if !expand_left && !expand_right && !expand_bottom && !expand_top {
-            return false;
-        }
-
-        // Calculate new dimensions
-        let add_left = if expand_left { expand_amount } else { 0 };
-        let add_right = if expand_right { expand_amount } else { 0 };
-        let add_bottom = if expand_bottom { expand_amount } else { 0 };
-        let add_top = if expand_top { expand_amount } else { 0 };
-
-        let new_num_x = num_x + add_left + add_right;
-        let new_num_y = num_y + add_bottom + add_top;
-        let new_num_cells = new_num_x * new_num_y;
-
-        // Get old fluid data
-        let old_fluid = self.fluid.take().unwrap();
-        let old_n = old_fluid.num_y;
-        let new_n = new_num_y;
-
-        // Create new fluid arrays
-        let mut new_u = vec![0.0f32; new_num_cells];
-        let mut new_v = vec![0.0f32; new_num_cells];
-        let mut new_p = vec![0.0f32; new_num_cells];
-        let mut new_s = vec![1.0f32; new_num_cells]; // All fluid by default
-        let mut new_m = vec![1.0f32; new_num_cells];
-
-        // Copy old data to new arrays with offset
-        for old_i in 0..old_fluid.num_x {
-            for old_j in 0..old_fluid.num_y {
-                let new_i = old_i + add_left;
-                let new_j = old_j + add_bottom;
-                
-                if new_i < new_num_x && new_j < new_num_y {
-                    let old_idx = old_i * old_n + old_j;
-                    let new_idx = new_i * new_n + new_j;
-                    
-                    new_u[new_idx] = old_fluid.u[old_idx];
-                    new_v[new_idx] = old_fluid.v[old_idx];
-                    new_p[new_idx] = old_fluid.p[old_idx];
-                    new_s[new_idx] = old_fluid.s[old_idx];
-                    new_m[new_idx] = old_fluid.m[old_idx];
-                }
-            }
-        }
-
-        // Create new fluid struct
-        let new_fluid = Fluid {
-            density,
-            num_x: new_num_x,
-            num_y: new_num_y,
-            num_cells: new_num_cells,
-            h,
-            u: new_u.clone(),
-            v: new_v.clone(),
-            new_u,
-            new_v,
-            p: new_p,
-            s: new_s,
-            m: new_m.clone(),
-            new_m,
-        };
-
-        self.fluid = Some(new_fluid);
-
-        // Update emitter position (relative to new grid)
-        if add_left > 0 || add_bottom > 0 {
-            let old_width = num_x as f32;
-            let old_height = num_y as f32;
-            let new_width = new_num_x as f32;
-            let new_height = new_num_y as f32;
-            
-            let abs_x = self.emitter_x * old_width;
-            let abs_y = self.emitter_y * old_height;
-            self.emitter_x = (abs_x + add_left as f32) / new_width;
-            self.emitter_y = (abs_y + add_bottom as f32) / new_height;
-        }
-
-        true
-    }
-
-    // ...existing code...
     pub fn set_obstacle(&mut self, x: f32, y: f32, reset: bool) {
         let mut vx = 0.0_f32;
         let mut vy = 0.0_f32;
@@ -811,9 +776,6 @@ impl Universe {
 
     pub fn simulate(&mut self) {
         if !self.paused {
-            // Expand grid if particles/walls are near the edges
-            self.expand_grid_if_needed();
-            
             // Get current particle count before mutable borrow
             let current_particles = self.get_particle_count();
             let emitter_enabled = self.emitter_enabled;
@@ -823,11 +785,26 @@ impl Universe {
             let emitter_radius = self.emitter_radius;
             let wind_x = self.wind_x;
             let wind_y = self.wind_y;
+            let current_frame = self.frame_nr;
+            let border_size = self.border_size;
 
             if let Some(ref mut f) = self.fluid {
                 let n = f.num_y;
 
-                // Apply wind at the inlet (left side)
+                // Apply wind as a global force - gently push all fluid cells
+                // This makes wind changes more responsive
+                let wind_strength = 0.1; // How quickly wind affects velocity
+                for i in 1..f.num_x - 1 {
+                    for j in 1..f.num_y - 1 {
+                        if f.s[i * n + j] != 0.0 {
+                            // Blend current velocity towards wind velocity
+                            f.u[i * n + j] += (wind_x - f.u[i * n + j]) * wind_strength;
+                            f.v[i * n + j] += (wind_y - f.v[i * n + j]) * wind_strength;
+                        }
+                    }
+                }
+
+                // Also set wind at inlet boundaries for inflow
                 for j in 0..f.num_y {
                     if f.s[1 * n + j] != 0.0 {
                         f.u[1 * n + j] = wind_x;
@@ -835,15 +812,22 @@ impl Universe {
                     }
                 }
 
-                // Emit particles from emitter if enabled and under max count
-                if emitter_enabled && current_particles < max_particles {
+                // Remove oldest particles if we're at or over the limit
+                if current_particles >= max_particles {
+                    let particles_to_remove =
+                        current_particles - max_particles + (max_particles / 20).max(1);
+                    f.remove_oldest_particles(particles_to_remove);
+                }
+
+                // Emit particles from emitter if enabled
+                if emitter_enabled {
                     let emitter_i = ((emitter_x * (f.num_x as f32)) as usize)
                         .min(f.num_x - 2)
                         .max(1);
                     let emitter_j = ((emitter_y * (f.num_y as f32)) as usize)
                         .min(f.num_y - 2)
                         .max(1);
-                    let emit_radius = ((emitter_radius * (f.num_y as f32)) as i32).max(1);
+                    let emit_radius = (emitter_radius as i32).max(1);
 
                     for di in -emit_radius..=emit_radius {
                         for dj in -emit_radius..=emit_radius {
@@ -855,6 +839,10 @@ impl Universe {
                                 let r_sq = (emit_radius * emit_radius) as f32;
 
                                 if dist_sq <= r_sq && f.s[i * n + j] != 0.0 {
+                                    // Only set age if this is a new smoke cell
+                                    if f.m[i * n + j] > 0.5 {
+                                        f.particle_age[i * n + j] = current_frame;
+                                    }
                                     f.m[i * n + j] = 0.0; // Emit smoke/fluid
                                 }
                             }
@@ -867,6 +855,9 @@ impl Universe {
                 if self.speed != 0.0 {
                     f.simulate(effective_dt, self.gravity, self.num_iters, self.over_relaxation);
                 }
+
+                // Remove particles that reach the border
+                f.remove_border_particles(border_size);
             }
         }
         self.frame_nr += 1;
@@ -886,13 +877,15 @@ impl Universe {
 
     // Drawing methods
     pub fn paint_fluid(&mut self, x: f32, y: f32, brush_size: f32) {
+        let current_frame = self.frame_nr;
         if let Some(ref mut f) = self.fluid {
-            let h = f.h;
-            let radius = brush_size / (self.cell_size * 2.0);
+            // Convert pixel coordinates to grid cell indices
+            // brush_size is in pixels, cell_size is pixels per cell
+            let grid_radius = (brush_size / self.cell_size).max(1.0).ceil() as i32;
 
-            let gi = (x / self.cell_size) as i32;
-            let gj = (y / self.cell_size) as i32;
-            let grid_radius = (radius / h).ceil() as i32;
+            // Use floor for proper pixel-to-cell mapping
+            let gi = (x / self.cell_size).floor() as i32;
+            let gj = (y / self.cell_size).floor() as i32;
 
             for di in -grid_radius..=grid_radius {
                 for dj in -grid_radius..=grid_radius {
@@ -908,6 +901,10 @@ impl Universe {
 
                         if dist_sq <= r_sq {
                             if f.s[i * n + j] != 0.0 {
+                                // Only set age if this is a new smoke cell
+                                if f.m[i * n + j] > 0.5 {
+                                    f.particle_age[i * n + j] = current_frame;
+                                }
                                 f.m[i * n + j] = 0.0;
                             }
                         }
@@ -919,11 +916,11 @@ impl Universe {
 
     pub fn paint_wall(&mut self, x: f32, y: f32, brush_size: f32) {
         if let Some(ref mut f) = self.fluid {
-            let radius = brush_size / (self.cell_size * 2.0);
+            // Convert pixel coordinates to grid cell indices
+            let grid_radius = (brush_size / self.cell_size).max(1.0).ceil() as i32;
 
-            let gi = (x / self.cell_size) as i32;
-            let gj = (y / self.cell_size) as i32;
-            let grid_radius = radius.ceil() as i32;
+            let gi = (x / self.cell_size).floor() as i32;
+            let gj = (y / self.cell_size).floor() as i32;
 
             for di in -grid_radius..=grid_radius {
                 for dj in -grid_radius..=grid_radius {
@@ -962,11 +959,11 @@ impl Universe {
 
     pub fn erase(&mut self, x: f32, y: f32, brush_size: f32) {
         if let Some(ref mut f) = self.fluid {
-            let radius = brush_size / (self.cell_size * 2.0);
+            // Convert pixel coordinates to grid cell indices
+            let grid_radius = (brush_size / self.cell_size).max(1.0).ceil() as i32;
 
-            let gi = (x / self.cell_size) as i32;
-            let gj = (y / self.cell_size) as i32;
-            let grid_radius = radius.ceil() as i32;
+            let gi = (x / self.cell_size).floor() as i32;
+            let gj = (y / self.cell_size).floor() as i32;
 
             for di in -grid_radius..=grid_radius {
                 for dj in -grid_radius..=grid_radius {
@@ -983,6 +980,7 @@ impl Universe {
                         if dist_sq <= r_sq {
                             f.s[i * n + j] = 1.0;
                             f.m[i * n + j] = 1.0;
+                            f.particle_age[i * n + j] = 0;
                             f.u[i * n + j] = 0.0;
                             f.v[i * n + j] = 0.0;
                         }
@@ -1043,17 +1041,44 @@ impl Universe {
         serde_wasm_bindgen::to_value(&particles).unwrap()
     }
 
-    // Get walls for rendering
+    // Get walls for rendering - returns (x, y, is_border) tuples
+    // Border is visual only (not a physics wall), user walls are actual obstacles
     pub fn get_walls(&self) -> JsValue {
-        let mut walls: Vec<(i32, i32)> = Vec::new();
+        let mut walls: Vec<(i32, i32, bool)> = Vec::new();
 
         if let Some(ref f) = self.fluid {
             let n = f.num_y;
+            let bs = self.border_size.max(1);
 
-            for i in 0..f.num_x {
-                for j in 0..f.num_y {
+            // Add visual border (not physics walls) with configurable thickness
+            for b in 0..bs {
+                for i in 0..f.num_x {
+                    // Bottom rows
+                    if b < f.num_y {
+                        walls.push((i as i32, b as i32, true));
+                    }
+                    // Top rows
+                    if f.num_y - 1 - b < f.num_y {
+                        walls.push((i as i32, (f.num_y - 1 - b) as i32, true));
+                    }
+                }
+                for j in bs..f.num_y - bs {
+                    // Left columns
+                    if b < f.num_x {
+                        walls.push((b as i32, j as i32, true));
+                    }
+                    // Right columns
+                    if f.num_x - 1 - b < f.num_x {
+                        walls.push(((f.num_x - 1 - b) as i32, j as i32, true));
+                    }
+                }
+            }
+
+            // Add user-placed walls (actual physics obstacles)
+            for i in bs..f.num_x - bs {
+                for j in bs..f.num_y - bs {
                     if f.s[i * n + j] == 0.0 {
-                        walls.push((i as i32, j as i32));
+                        walls.push((i as i32, j as i32, false));
                     }
                 }
             }
@@ -1253,6 +1278,27 @@ impl Universe {
     }
     pub fn toggle_emitter(&mut self) {
         self.emitter_enabled = !self.emitter_enabled;
+    }
+
+    // Border getters/setters
+    pub fn get_border_size(&self) -> usize {
+        self.border_size
+    }
+    pub fn set_border_size(&mut self, size: usize) {
+        self.border_size = size.max(1); // Minimum 1 cell border
+    }
+
+    // Grid size getters/setters
+    pub fn get_grid_size(&self) -> usize {
+        self.grid_size
+    }
+    pub fn set_grid_size(&mut self, size: usize) {
+        let new_size = size.clamp(20, 500); // Clamp between 20 and 500 cells
+        if new_size != self.grid_size {
+            self.grid_size = new_size;
+            // Reinitialize the grid with the new size
+            self.setup_blank(16.0, 9.0);
+        }
     }
 
     // Fluid data access

@@ -106,7 +106,7 @@ export default function SandBox({ universe }: SandBoxProps) {
       graphics.clear();
 
       const particles = universe.get_particles() as FluidParticle[];
-      const walls = universe.get_walls() as [number, number][];
+      const walls = universe.get_walls() as [number, number, boolean][];
       const cellSize = universe.get_cell_size();
       const particleRadius = universe.get_particle_radius();
 
@@ -134,14 +134,16 @@ export default function SandBox({ universe }: SandBoxProps) {
         }
       }
 
-      // Draw walls
-      for (const [gx, gy] of walls) {
+      // Draw walls - border walls are cyan, user walls are gray
+      for (const [gx, gy, isBorder] of walls) {
         const wx = (gx + 0.5) * cellSize;
         const wy = (gy + 0.5) * cellSize;
         const halfSize = cellSize / 2;
 
         graphics.rect(wx - halfSize, wy - halfSize, cellSize, cellSize);
-        graphics.fill({ color: 0x4a5568, alpha: 1 });
+        // Border walls are cyan (0x00bcd4), user-placed walls are gray (0x4a5568)
+        const wallColor = isBorder ? 0x00bcd4 : 0x4a5568;
+        graphics.fill({ color: wallColor, alpha: 1 });
       }
 
       // Draw fluid particles

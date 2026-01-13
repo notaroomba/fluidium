@@ -31,14 +31,29 @@ export default function UniversePropertyEditor() {
   // Wind state
   const [windX, setWindX] = useState(universe.get_wind_x());
   const [windY, setWindY] = useState(universe.get_wind_y());
-  const [windXValue, setWindXValue] = useState(universe.get_wind_x().toFixed(2));
-  const [windYValue, setWindYValue] = useState(universe.get_wind_y().toFixed(2));
+  const [windXValue, setWindXValue] = useState(
+    universe.get_wind_x().toFixed(2)
+  );
+  const [windYValue, setWindYValue] = useState(
+    universe.get_wind_y().toFixed(2)
+  );
   const [isDraggingWind, setIsDraggingWind] = useState(false);
 
   // Emitter state
-  const [emitterEnabled, setEmitterEnabled] = useState(universe.get_emitter_enabled());
-  const [emitterRadius, setEmitterRadius] = useState(universe.get_emitter_radius().toFixed(2));
-  const [maxParticles, setMaxParticles] = useState(universe.get_max_particles().toString());
+  const [emitterEnabled, setEmitterEnabled] = useState(
+    universe.get_emitter_enabled()
+  );
+  const [emitterRadius, setEmitterRadius] = useState(
+    universe.get_emitter_radius().toFixed(0)
+  );
+  const [maxParticles, setMaxParticles] = useState(
+    universe.get_max_particles().toString()
+  );
+
+  // Grid size state (simulation area size)
+  const [gridSize, setGridSize] = useState(
+    universe.get_grid_size().toString()
+  );
 
   // Update local values when universe changes
   useEffect(() => {
@@ -51,16 +66,19 @@ export default function UniversePropertyEditor() {
       setCellSize(universe.get_cell_size().toFixed(0));
       setWindXValue(universe.get_wind_x().toFixed(2));
       setWindYValue(universe.get_wind_y().toFixed(2));
-      setEmitterRadius(universe.get_emitter_radius().toFixed(2));
+      setEmitterRadius(universe.get_emitter_radius().toFixed(0));
       setMaxParticles(universe.get_max_particles().toString());
+      setGridSize(universe.get_grid_size().toString());
     }
     setWindX(universe.get_wind_x());
     setWindY(universe.get_wind_y());
     setEmitterEnabled(universe.get_emitter_enabled());
   }, [universe, isEditing]);
 
-  // Draw wind vector canvas
+  // Draw wind vector canvas - add isUniverseEditorOpen to dependencies to redraw when panel opens
   useEffect(() => {
+    if (!isUniverseEditorOpen) return;
+    
     const canvas = canvasRef.current;
     if (!canvas) return;
 
@@ -100,11 +118,12 @@ export default function UniversePropertyEditor() {
     ctx.arc(centerX, centerY, 4, 0, Math.PI * 2);
     ctx.fill();
 
-    // Draw wind vector
+    // Draw wind vector - always draw if windX or windY has a value
     const windVectorX = windX * scale;
     const windVectorY = -windY * scale; // Flip Y for canvas coordinates
+    const magnitude = Math.sqrt(windVectorX * windVectorX + windVectorY * windVectorY);
 
-    if (Math.abs(windVectorX) > 0.1 || Math.abs(windVectorY) > 0.1) {
+    if (magnitude > 0.1) {
       // Draw line
       ctx.strokeStyle = "#3b82f6";
       ctx.lineWidth = 3;
@@ -132,7 +151,7 @@ export default function UniversePropertyEditor() {
       ctx.closePath();
       ctx.fill();
     }
-  }, [windX, windY]);
+  }, [windX, windY, isUniverseEditorOpen]);
 
   const handleCanvasMouseDown = (e: React.MouseEvent<HTMLCanvasElement>) => {
     setIsDraggingWind(true);
@@ -245,11 +264,15 @@ export default function UniversePropertyEditor() {
         break;
       case "emitterRadius":
         universe.set_emitter_radius(value);
-        setEmitterRadius(value.toFixed(2));
+        setEmitterRadius(value.toFixed(0));
         break;
       case "maxParticles":
         universe.set_max_particles(Math.floor(value));
         setMaxParticles(Math.floor(value).toString());
+        break;
+      case "gridSize":
+        universe.set_grid_size(Math.floor(value));
+        setGridSize(Math.floor(value).toString());
         break;
     }
     setRender((prev) => prev + 1);
@@ -343,7 +366,9 @@ export default function UniversePropertyEditor() {
             onBlur={() => setIsEditing(null)}
             className="w-full px-3 py-2 text-base border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
           />
-          <span className="text-xs text-gray-500">Default: 2.0 (flow from left)</span>
+          <span className="text-xs text-gray-500">
+            Default: 2.0 (flow from left)
+          </span>
         </div>
 
         {/* Wind Y */}
@@ -365,7 +390,9 @@ export default function UniversePropertyEditor() {
             onBlur={() => setIsEditing(null)}
             className="w-full px-3 py-2 text-base border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
           />
-          <span className="text-xs text-gray-500">Default: 0 (horizontal flow)</span>
+          <span className="text-xs text-gray-500">
+            Default: 0 (horizontal flow)
+          </span>
         </div>
 
         {/* Emitter Section */}
@@ -394,7 +421,7 @@ export default function UniversePropertyEditor() {
           {/* Emitter Radius */}
           <div className="space-y-1">
             <label className="text-sm font-medium text-gray-700">
-              Emitter Radius:
+              Emitter Radius (cells):
             </label>
             <input
               type="text"
@@ -410,7 +437,9 @@ export default function UniversePropertyEditor() {
               onBlur={() => setIsEditing(null)}
               className="w-full px-3 py-2 text-base border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
             />
-            <span className="text-xs text-gray-500">Default: 0.1 (10% of domain height)</span>
+            <span className="text-xs text-gray-500">
+              Default: 5 (radius in grid cells)
+            </span>
           </div>
 
           {/* Max Particles */}
@@ -434,6 +463,30 @@ export default function UniversePropertyEditor() {
             />
             <span className="text-xs text-gray-500">Default: 10000</span>
           </div>
+
+          {/* Grid Size */}
+          <div className="space-y-1 mt-2">
+            <label className="text-sm font-medium text-gray-700">
+              Grid Size (cells):
+            </label>
+            <input
+              type="text"
+              value={gridSize}
+              onChange={(e) => {
+                setIsEditing("gridSize");
+                setGridSize(e.target.value);
+                const val = parseInt(e.target.value);
+                if (!isNaN(val) && val >= 20 && val <= 500) {
+                  handlePropertyUpdate("gridSize", val);
+                }
+              }}
+              onBlur={() => setIsEditing(null)}
+              className="w-full px-3 py-2 text-base border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
+            />
+            <span className="text-xs text-gray-500">
+              Default: 100 (simulation area resolution, 20-500)
+            </span>
+          </div>
         </div>
 
         {/* Simulation Settings Section */}
@@ -444,7 +497,9 @@ export default function UniversePropertyEditor() {
 
           {/* Gravity */}
           <div className="space-y-1">
-            <label className="text-sm font-medium text-gray-700">Gravity:</label>
+            <label className="text-sm font-medium text-gray-700">
+              Gravity:
+            </label>
             <input
               type="text"
               value={gravity}
@@ -460,7 +515,7 @@ export default function UniversePropertyEditor() {
               className="w-full px-3 py-2 text-base border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
             />
             <span className="text-xs text-gray-500">
-              Default: 0 (wind tunnel), -9.81 for gravity
+              Default: 0 (no gravity), use -9.81 for downward gravity
             </span>
           </div>
 
@@ -583,7 +638,9 @@ export default function UniversePropertyEditor() {
               onBlur={() => setIsEditing(null)}
               className="w-full px-3 py-2 text-base border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
             />
-            <span className="text-xs text-gray-500">Affects rendering scale</span>
+            <span className="text-xs text-gray-500">
+              Affects rendering scale
+            </span>
           </div>
         </div>
       </div>
