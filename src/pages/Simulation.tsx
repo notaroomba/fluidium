@@ -28,6 +28,12 @@ const PixiCanvas = memo(function PixiCanvas({
   universe: Universe;
 }) {
   const [width, height] = useWindowDimension();
+  
+  // Get grid dimensions for centering
+  const gridDims = universe.get_grid_dimensions();
+  const gridWidth = gridDims[0];
+  const gridHeight = gridDims[1];
+  
   return (
     <Application
       background={"#ffffff"}
@@ -40,7 +46,7 @@ const PixiCanvas = memo(function PixiCanvas({
         (window as any).pixiApp = app;
       }}
     >
-      <Viewport>
+      <Viewport centerOnGrid={{ width: gridWidth, height: gridHeight }}>
         <SandBox universe={universe} />
       </Viewport>
     </Application>

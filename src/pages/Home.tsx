@@ -21,6 +21,11 @@ const PixiCanvas = memo(function PixiCanvas({
   universe: Universe;
 }) {
   const [width, height] = useWindowDimension();
+  
+  // Get grid dimensions for centering
+  const gridDims = universe.get_grid_dimensions();
+  const gridWidth = gridDims[0];
+  const gridHeight = gridDims[1];
 
   return (
     <Application
@@ -34,7 +39,7 @@ const PixiCanvas = memo(function PixiCanvas({
         (window as any).pixiApp = app;
       }}
     >
-      <Viewport>
+      <Viewport centerOnGrid={{ width: gridWidth, height: gridHeight }}>
         <SandBox universe={universe} />
       </Viewport>
     </Application>
@@ -57,7 +62,7 @@ function HomeContent({ universe }: { universe: Universe }) {
         <div className="flex flex-col gap-3 mx-auto justify-center">
           <Link
             to="/simulation"
-            className="no-underline w-1/2 mx-auto bg-black text-white text-xl lg:text-3xl font-bold px-8 py-3 rounded-lg shadow-lg text-center transition-transform hover:scale-105"
+            className="no-underline w-full mx-auto bg-black text-white text-xl lg:text-3xl font-bold px-8 py-3 rounded-lg shadow-lg text-center transition-transform hover:scale-105"
           >
             Simulation
           </Link>
@@ -71,10 +76,35 @@ export default function Home() {
   const universeRef = useRef<Universe>(new Universe());
 
   useEffect(() => {
-    // Initialize universe with a fluid scene
+    // Initialize universe with Euler wind tunnel
     const universe = universeRef.current;
-    // Setup wind tunnel scene (scene 1) for the home page background
-    universe.setup_scene(1, 16.0, 9.0);
+    
+    // Setup blank canvas first to ensure Euler mode
+    universe.setup_blank(16.0, 9.0);
+    
+    // Hide the obstacle/ball on the home screen
+    (universe as any).set_show_obstacle(false);
+    
+    // Get grid info for placing random walls
+    const cellSize = universe.get_cell_size();
+    const gridDims = universe.get_grid_dimensions();
+    const gridWidth = gridDims[0];
+    const gridHeight = gridDims[1];
+    
+    // Add random walls around the simulation area
+    const numWalls = 8 + Math.floor(Math.random() * 5); // 8-12 random walls
+    for (let i = 0; i < numWalls; i++) {
+      // Place walls in random positions, avoiding the center and edges
+      const margin = gridWidth * 0.15;
+      const x = margin + Math.random() * (gridWidth - margin * 2);
+      const y = margin + Math.random() * (gridHeight - margin * 2);
+      
+      // Random brush size for variety
+      const brushSize = cellSize * (2 + Math.random() * 4);
+      
+      // Paint the wall
+      universe.paint_wall(x, y, brushSize);
+    }
   }, []);
 
   return (

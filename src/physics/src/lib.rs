@@ -1613,21 +1613,39 @@ impl Universe {
             vy = (y - self.obstacle_y) / self.dt;
         }
 
+        let old_x = self.obstacle_x;
+        let old_y = self.obstacle_y;
+        let r = self.obstacle_radius;
+        
         self.obstacle_x = x;
         self.obstacle_y = y;
-        let r = self.obstacle_radius;
 
         if let Some(ref mut f) = self.fluid {
             let n = f.num_y;
 
             for i in 1..f.num_x - 2 {
                 for j in 1..f.num_y - 2 {
-                    f.s[i * n + j] = 1.0;
+                    let cell_x = ((i as f32) + 0.5) * f.h;
+                    let cell_y = ((j as f32) + 0.5) * f.h;
+                    
+                    // Check if cell was inside old obstacle position
+                    let old_dx = cell_x - old_x;
+                    let old_dy = cell_y - old_y;
+                    let was_in_obstacle = old_dx * old_dx + old_dy * old_dy < r * r;
+                    
+                    // Check if cell is inside new obstacle position
+                    let new_dx = cell_x - x;
+                    let new_dy = cell_y - y;
+                    let is_in_obstacle = new_dx * new_dx + new_dy * new_dy < r * r;
 
-                    let dx = ((i as f32) + 0.5) * f.h - x;
-                    let dy = ((j as f32) + 0.5) * f.h - y;
-
-                    if dx * dx + dy * dy < r * r {
+                    // Only restore cells that were part of the OLD obstacle and are NOT part of the new one
+                    // This preserves user-placed walls
+                    if was_in_obstacle && !is_in_obstacle && !reset {
+                        f.s[i * n + j] = 1.0; // Restore to fluid
+                    }
+                    
+                    // Mark cells inside the NEW obstacle as solid
+                    if is_in_obstacle {
                         f.s[i * n + j] = 0.0;
                         if self.scene_nr == 2 {
                             f.m[i * n + j] = 0.5 + 0.5 * (0.1 * (self.frame_nr as f32)).sin();

@@ -10,6 +10,11 @@ import { SimulationProvider } from "../contexts/SimulationContext";
 
 function ErrorContent({ universe }: { universe: Universe }) {
   const [width, height] = useWindowDimension();
+  
+  // Get grid dimensions for centering
+  const gridDims = universe.get_grid_dimensions();
+  const gridWidth = gridDims[0];
+  const gridHeight = gridDims[1];
 
   return (
     <Transitions>
@@ -20,7 +25,7 @@ function ErrorContent({ universe }: { universe: Universe }) {
         className="overflow-hidden fixed top-0 left-0"
         antialias
       >
-        <Viewport>
+        <Viewport centerOnGrid={{ width: gridWidth, height: gridHeight }}>
           <SandBox universe={universe} />
         </Viewport>
       </Application>
@@ -45,37 +50,39 @@ function ErrorContent({ universe }: { universe: Universe }) {
 }
 
 export default function Error() {
-  const [width, height] = useWindowDimension();
-  const universeRef = useRef<Universe>(Universe.new_empty());
+  const universeRef = useRef<Universe>(new Universe());
 
   useEffect(() => {
-    // Create a background universe with random particles
+    // Initialize universe with Euler wind tunnel and random walls
     const universe = universeRef.current;
-    universe.set_coulomb_constant(8.9875517923e3);
-    universe.set_default_charge(1.0);
-    // auto-fade feature removed; no explicit initialization necessary
-
-    // Add random particles continuously
-    const addRandomParticles = () => {
-      const count = universe.get_particles().length;
-      if (count < 10) {
-        for (let i = 0; i < 1; i++) {
-          const x = Math.random() * width - width / 2;
-          const y = 0;
-          const vx = (Math.random() - 0.5) * 100;
-          const vy = Math.random() * 50 + 50;
-          universe.add_particle_simple(x, y, vx, vy, Math.random() * 10 - 5);
-        }
-      }
-    };
-
-    addRandomParticles();
-    const interval = setInterval(addRandomParticles, 1000);
-
-    return () => {
-      clearInterval(interval);
-    };
-  }, [width, height]);
+    
+    // Setup blank canvas to ensure Euler mode
+    universe.setup_blank(16.0, 9.0);
+    
+    // Hide the obstacle/ball on the error screen
+    (universe as any).set_show_obstacle(false);
+    
+    // Get grid info for placing random walls
+    const cellSize = universe.get_cell_size();
+    const gridDims = universe.get_grid_dimensions();
+    const gridWidth = gridDims[0];
+    const gridHeight = gridDims[1];
+    
+    // Add random walls around the simulation area
+    const numWalls = 10 + Math.floor(Math.random() * 6); // 10-15 random walls for error page
+    for (let i = 0; i < numWalls; i++) {
+      // Place walls in random positions, avoiding the center and edges
+      const margin = gridWidth * 0.15;
+      const x = margin + Math.random() * (gridWidth - margin * 2);
+      const y = margin + Math.random() * (gridHeight - margin * 2);
+      
+      // Random brush size for variety
+      const brushSize = cellSize * (2 + Math.random() * 4);
+      
+      // Paint the wall
+      universe.paint_wall(x, y, brushSize);
+    }
+  }, []);
 
   return (
     <SimulationProvider universe={universeRef.current}>
