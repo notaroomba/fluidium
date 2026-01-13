@@ -10,6 +10,10 @@ import {
   Navigation,
   Calculator,
   Layers,
+  Droplets,
+  Waves,
+  CircleDot,
+  Info,
 } from "lucide-react";
 import { Implementation } from "physics-engine";
 import { useState, useEffect } from "react";
@@ -25,6 +29,8 @@ export default function SettingsBar() {
     setShowGrid,
     showVelocity,
     setShowVelocity,
+    showMoreInfo,
+    setShowMoreInfo,
     isPaused,
     setIsPaused,
   } = useSimulation();
@@ -40,11 +46,32 @@ export default function SettingsBar() {
     universe.get_implementation()
   );
 
+  // FLIP-specific settings
+  const [flipRatio, setFlipRatio] = useState(() => {
+    const u = universe as any;
+    return u.get_flip_ratio ? u.get_flip_ratio() : 0.9;
+  });
+  const [compensateDrift, setCompensateDrift] = useState(() => {
+    const u = universe as any;
+    return u.get_compensate_drift ? u.get_compensate_drift() : false;
+  });
+  const [separateParticles, setSeparateParticles] = useState(() => {
+    const u = universe as any;
+    return u.get_separate_particles ? u.get_separate_particles() : true;
+  });
+
   // Density view
   const [showDensity, setShowDensity] = useState(universe.get_show_density());
 
   useEffect(() => {
     universe.set_implementation(implementation);
+    // Reset FLIP settings to defaults when implementation changes
+    const u = universe as any;
+    if (u.get_flip_ratio) setFlipRatio(u.get_flip_ratio());
+    if (u.get_compensate_drift) setCompensateDrift(u.get_compensate_drift());
+    if (u.get_separate_particles)
+      setSeparateParticles(u.get_separate_particles());
+    setRender((prev) => prev + 1);
   }, [implementation]);
 
   useEffect(() => {
@@ -107,11 +134,87 @@ export default function SettingsBar() {
                   ? "bg-blue-100"
                   : "hover:bg-gray-100"
               }`}
-              title="Euler Method"
+              title="Euler Method (Grid-based)"
             >
               <Calculator className="w-4 h-4 sm:w-5 sm:h-5" />
             </button>
+            <button
+              onClick={() => setImplementation(Implementation.Flip)}
+              className={`p-1.5 sm:p-2 rounded cursor-pointer transition-all duration-200 ${
+                implementation === Implementation.Flip
+                  ? "bg-blue-100"
+                  : "hover:bg-gray-100"
+              }`}
+              title="FLIP Method (Particle-based)"
+            >
+              <Droplets className="w-4 h-4 sm:w-5 sm:h-5" />
+            </button>
           </div>
+
+          {/* FLIP/PIC Ratio Slider - Only show when FLIP is selected */}
+          {implementation === Implementation.Flip && (
+            <div className="flex items-center gap-1 sm:gap-2 px-2 sm:px-4">
+              <span className="text-xs text-gray-500 whitespace-nowrap">
+                PIC
+              </span>
+              <input
+                type="range"
+                min="0"
+                max="1"
+                step="0.1"
+                value={flipRatio}
+                onChange={(e) => {
+                  const val = parseFloat(e.target.value);
+                  setFlipRatio(val);
+                  (universe as any).set_flip_ratio(val);
+                  setRender((prev) => prev + 1);
+                }}
+                className="w-16 sm:w-20 h-1.5 bg-gray-200 rounded-lg appearance-none cursor-pointer"
+                title={`PIC/FLIP Ratio: ${flipRatio.toFixed(
+                  1
+                )} (0=Viscous, 1=Splashy)`}
+              />
+              <span className="text-xs text-gray-500 whitespace-nowrap">
+                FLIP
+              </span>
+              <button
+                onClick={() => {
+                  const newValue = !compensateDrift;
+                  setCompensateDrift(newValue);
+                  (universe as any).set_compensate_drift(newValue);
+                  setRender((prev) => prev + 1);
+                }}
+                className={`p-1.5 sm:p-2 rounded cursor-pointer transition-all duration-200 ${
+                  compensateDrift ? "bg-blue-100" : "hover:bg-gray-100"
+                }`}
+                title={
+                  compensateDrift
+                    ? "Compensate Drift: ON (Prevents volume loss)"
+                    : "Compensate Drift: OFF"
+                }
+              >
+                <Waves className="w-4 h-4 sm:w-5 sm:h-5" />
+              </button>
+              <button
+                onClick={() => {
+                  const newValue = !separateParticles;
+                  setSeparateParticles(newValue);
+                  (universe as any).set_separate_particles(newValue);
+                  setRender((prev) => prev + 1);
+                }}
+                className={`p-1.5 sm:p-2 rounded cursor-pointer transition-all duration-200 ${
+                  separateParticles ? "bg-blue-100" : "hover:bg-gray-100"
+                }`}
+                title={
+                  separateParticles
+                    ? "Separate Particles: ON (Better particle spacing)"
+                    : "Separate Particles: OFF"
+                }
+              >
+                <CircleDot className="w-4 h-4 sm:w-5 sm:h-5" />
+              </button>
+            </div>
+          )}
 
           {/* Visualization Options */}
           <div className="flex items-center gap-1 sm:gap-2 px-2 sm:px-4">
@@ -153,6 +256,18 @@ export default function SettingsBar() {
               title={showDensity ? "Hide Density" : "Show Density"}
             >
               <Layers className="w-4 h-4 sm:w-5 sm:h-5" />
+            </button>
+            <button
+              onClick={() => {
+                setShowMoreInfo(!showMoreInfo);
+                setRender((prev) => prev + 1);
+              }}
+              className={`p-1.5 sm:p-2 rounded cursor-pointer transition-all duration-200 ${
+                showMoreInfo ? "bg-blue-100" : "hover:bg-gray-100"
+              }`}
+              title={showMoreInfo ? "Hide Info Overlay" : "Show Info Overlay"}
+            >
+              <Info className="w-4 h-4 sm:w-5 sm:h-5" />
             </button>
           </div>
 

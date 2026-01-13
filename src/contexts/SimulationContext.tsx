@@ -28,6 +28,8 @@ interface SimulationContextType {
   setShowGrid: (show: boolean) => void;
   showVelocity: boolean;
   setShowVelocity: (show: boolean) => void;
+  showMoreInfo: boolean;
+  setShowMoreInfo: (show: boolean) => void;
   // Scene selection
   sceneNr: number;
   setSceneNr: (scene: number) => void;
@@ -67,6 +69,7 @@ export function SimulationProvider({
   // Visualization
   const [showGrid, setShowGrid] = useState(false);
   const [showVelocity, setShowVelocity] = useState(false);
+  const [showMoreInfo, setShowMoreInfo] = useState(true);
 
   // Scene selection - default to wind tunnel (1)
   const [sceneNr, setSceneNr] = useState(1);
@@ -99,6 +102,8 @@ export function SimulationProvider({
         setShowGrid,
         showVelocity,
         setShowVelocity,
+        showMoreInfo,
+        setShowMoreInfo,
         sceneNr,
         setSceneNr,
       }}

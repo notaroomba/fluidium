@@ -48,7 +48,7 @@ const PixiCanvas = memo(function PixiCanvas({
 });
 
 function SimulationContent() {
-  const { universe, fps, toolMode, brushType, brushSize } = useSimulation();
+  const { universe, fps, toolMode, brushType, brushSize, showMoreInfo } = useSimulation();
 
   return (
     <Transitions>
@@ -71,14 +71,16 @@ function SimulationContent() {
       </div>
 
       {/* Info Overlay */}
-      <div className="absolute top-4 right-4 bg-black/70 text-white p-4 rounded-lg text-sm font-mono space-y-1 pointer-events-none">
-        <div>FPS: {fps}</div>
-        <div>Particles: {universe.get_particle_count()}</div>
-        <div>Speed: {universe.get_speed()}x</div>
-        <div>Tool: {toolMode === "none" ? "Pan" : toolMode}</div>
-        {toolMode === "pencil" && <div>Brush: {brushType}</div>}
-        {toolMode !== "none" && <div>Size: {brushSize}</div>}
-      </div>
+      {showMoreInfo && (
+        <div className="absolute top-4 right-4 bg-black/70 text-white p-4 rounded-lg text-sm font-mono space-y-1 pointer-events-none">
+          <div>FPS: {fps}</div>
+          <div>Particles: {universe.get_particle_count()}</div>
+          <div>Speed: {universe.get_speed()}x</div>
+          <div>Tool: {toolMode === "none" ? "Pan" : toolMode}</div>
+          {toolMode === "pencil" && <div>Brush: {brushType}</div>}
+          {toolMode !== "none" && <div>Size: {brushSize}</div>}
+        </div>
+      )}
 
       <div className="absolute bottom-0 w-screen p-2 sm:p-4 pointer-events-none flex justify-center items-start">
         <SettingsBar />

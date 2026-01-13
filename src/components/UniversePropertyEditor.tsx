@@ -1,6 +1,7 @@
 import { X, GripVertical } from "lucide-react";
 import { useState, useRef, useEffect } from "react";
 import { useSimulation } from "../contexts/SimulationContext";
+import { Implementation } from "physics-engine";
 
 export default function UniversePropertyEditor() {
   const { universe, isUniverseEditorOpen, setIsUniverseEditorOpen, setRender } =
@@ -15,6 +16,7 @@ export default function UniversePropertyEditor() {
   const [isEditing, setIsEditing] = useState<string | null>(null);
   const editorRef = useRef<HTMLDivElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
+  const emitterCanvasRef = useRef<HTMLCanvasElement>(null);
 
   // Local state for input values
   const [gravity, setGravity] = useState(universe.get_gravity().toFixed(2));
@@ -43,6 +45,9 @@ export default function UniversePropertyEditor() {
   const [emitterEnabled, setEmitterEnabled] = useState(
     universe.get_emitter_enabled()
   );
+  const [emitterX, setEmitterX] = useState(universe.get_emitter_x());
+  const [emitterY, setEmitterY] = useState(universe.get_emitter_y());
+  const [isDraggingEmitter, setIsDraggingEmitter] = useState(false);
   const [emitterRadius, setEmitterRadius] = useState(
     universe.get_emitter_radius().toFixed(0)
   );
@@ -51,8 +56,23 @@ export default function UniversePropertyEditor() {
   );
 
   // Grid size state (simulation area size)
-  const [gridSize, setGridSize] = useState(
-    universe.get_grid_size().toString()
+  const [gridSize, setGridSize] = useState(universe.get_grid_size().toString());
+
+  // FLIP-specific state
+  const [flipRatio, setFlipRatio] = useState(() => {
+    const u = universe as any;
+    return u.get_flip_ratio ? u.get_flip_ratio() : 0.9;
+  });
+  const [compensateDrift, setCompensateDrift] = useState(() => {
+    const u = universe as any;
+    return u.get_compensate_drift ? u.get_compensate_drift() : false;
+  });
+  const [separateParticles, setSeparateParticles] = useState(() => {
+    const u = universe as any;
+    return u.get_separate_particles ? u.get_separate_particles() : true;
+  });
+  const [implementation, setImplementation] = useState<Implementation>(
+    universe.get_implementation()
   );
 
   // Update local values when universe changes
@@ -69,16 +89,25 @@ export default function UniversePropertyEditor() {
       setEmitterRadius(universe.get_emitter_radius().toFixed(0));
       setMaxParticles(universe.get_max_particles().toString());
       setGridSize(universe.get_grid_size().toString());
+      // FLIP-specific settings (using type assertion for new methods)
+      const u = universe as any;
+      if (u.get_flip_ratio) setFlipRatio(u.get_flip_ratio());
+      if (u.get_compensate_drift) setCompensateDrift(u.get_compensate_drift());
+      if (u.get_separate_particles)
+        setSeparateParticles(u.get_separate_particles());
+      setImplementation(universe.get_implementation());
     }
     setWindX(universe.get_wind_x());
     setWindY(universe.get_wind_y());
     setEmitterEnabled(universe.get_emitter_enabled());
+    setEmitterX(universe.get_emitter_x());
+    setEmitterY(universe.get_emitter_y());
   }, [universe, isEditing]);
 
   // Draw wind vector canvas - add isUniverseEditorOpen to dependencies to redraw when panel opens
   useEffect(() => {
     if (!isUniverseEditorOpen) return;
-    
+
     const canvas = canvasRef.current;
     if (!canvas) return;
 
@@ -121,7 +150,9 @@ export default function UniversePropertyEditor() {
     // Draw wind vector - always draw if windX or windY has a value
     const windVectorX = windX * scale;
     const windVectorY = -windY * scale; // Flip Y for canvas coordinates
-    const magnitude = Math.sqrt(windVectorX * windVectorX + windVectorY * windVectorY);
+    const magnitude = Math.sqrt(
+      windVectorX * windVectorX + windVectorY * windVectorY
+    );
 
     if (magnitude > 0.1) {
       // Draw line
@@ -152,6 +183,111 @@ export default function UniversePropertyEditor() {
       ctx.fill();
     }
   }, [windX, windY, isUniverseEditorOpen]);
+
+  // Draw emitter position canvas
+  useEffect(() => {
+    if (!isUniverseEditorOpen) return;
+
+    const canvas = emitterCanvasRef.current;
+    if (!canvas) return;
+
+    const ctx = canvas.getContext("2d");
+    if (!ctx) return;
+
+    // Clear canvas
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+    // Draw background (simulation area)
+    ctx.fillStyle = "#1a1a2e";
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+    // Draw border to represent simulation bounds
+    ctx.strokeStyle = "#00bcd4";
+    ctx.lineWidth = 3;
+    ctx.strokeRect(2, 2, canvas.width - 4, canvas.height - 4);
+
+    // Draw grid
+    ctx.strokeStyle = "#333355";
+    ctx.lineWidth = 1;
+    const gridStep = 20;
+    for (let x = gridStep; x < canvas.width; x += gridStep) {
+      ctx.beginPath();
+      ctx.moveTo(x, 0);
+      ctx.lineTo(x, canvas.height);
+      ctx.stroke();
+    }
+    for (let y = gridStep; y < canvas.height; y += gridStep) {
+      ctx.beginPath();
+      ctx.moveTo(0, y);
+      ctx.lineTo(canvas.width, y);
+      ctx.stroke();
+    }
+
+    // Draw emitter position as a blue dot
+    // emitterX and emitterY are in normalized coordinates (0-1)
+    const dotX = emitterX * canvas.width;
+    const dotY = (1 - emitterY) * canvas.height; // Flip Y for canvas coordinates
+
+    // Draw glow effect
+    const gradient = ctx.createRadialGradient(dotX, dotY, 0, dotX, dotY, 20);
+    gradient.addColorStop(0, "rgba(59, 130, 246, 0.8)");
+    gradient.addColorStop(0.5, "rgba(59, 130, 246, 0.3)");
+    gradient.addColorStop(1, "rgba(59, 130, 246, 0)");
+    ctx.fillStyle = gradient;
+    ctx.beginPath();
+    ctx.arc(dotX, dotY, 20, 0, Math.PI * 2);
+    ctx.fill();
+
+    // Draw main dot
+    ctx.fillStyle = "#3b82f6";
+    ctx.beginPath();
+    ctx.arc(dotX, dotY, 8, 0, Math.PI * 2);
+    ctx.fill();
+
+    // Draw white center
+    ctx.fillStyle = "#ffffff";
+    ctx.beginPath();
+    ctx.arc(dotX, dotY, 3, 0, Math.PI * 2);
+    ctx.fill();
+  }, [emitterX, emitterY, isUniverseEditorOpen]);
+
+  const handleEmitterCanvasMouseDown = (
+    e: React.MouseEvent<HTMLCanvasElement>
+  ) => {
+    setIsDraggingEmitter(true);
+    updateEmitterFromMouse(e);
+  };
+
+  const handleEmitterCanvasMouseMove = (
+    e: React.MouseEvent<HTMLCanvasElement>
+  ) => {
+    if (isDraggingEmitter) {
+      updateEmitterFromMouse(e);
+    }
+  };
+
+  const handleEmitterCanvasMouseUp = () => {
+    setIsDraggingEmitter(false);
+  };
+
+  const updateEmitterFromMouse = (e: React.MouseEvent<HTMLCanvasElement>) => {
+    const canvas = emitterCanvasRef.current;
+    if (!canvas) return;
+
+    const rect = canvas.getBoundingClientRect();
+    const x = e.clientX - rect.left;
+    const y = e.clientY - rect.top;
+
+    // Convert to normalized coordinates (0-1), clamped to valid range
+    const newEmitterX = Math.max(0.05, Math.min(0.95, x / canvas.width));
+    const newEmitterY = Math.max(0.05, Math.min(0.95, 1 - y / canvas.height)); // Flip Y back
+
+    setEmitterX(newEmitterX);
+    setEmitterY(newEmitterY);
+    universe.set_emitter_x(newEmitterX);
+    universe.set_emitter_y(newEmitterY);
+    setRender((prev) => prev + 1);
+  };
 
   const handleCanvasMouseDown = (e: React.MouseEvent<HTMLCanvasElement>) => {
     setIsDraggingWind(true);
@@ -418,6 +554,27 @@ export default function UniversePropertyEditor() {
             </button>
           </div>
 
+          {/* Emitter Position Canvas */}
+          <div className="space-y-1 mb-3">
+            <label className="text-sm font-medium text-gray-700">
+              Emitter Position:
+            </label>
+            <canvas
+              ref={emitterCanvasRef}
+              width={352}
+              height={150}
+              className="border border-gray-300 rounded cursor-crosshair w-full"
+              onMouseDown={handleEmitterCanvasMouseDown}
+              onMouseMove={handleEmitterCanvasMouseMove}
+              onMouseUp={handleEmitterCanvasMouseUp}
+              onMouseLeave={handleEmitterCanvasMouseUp}
+            />
+            <p className="text-xs text-gray-500">
+              Click and drag to set emitter position (X:{" "}
+              {(emitterX * 100).toFixed(0)}%, Y: {(emitterY * 100).toFixed(0)}%)
+            </p>
+          </div>
+
           {/* Emitter Radius */}
           <div className="space-y-1">
             <label className="text-sm font-medium text-gray-700">
@@ -643,6 +800,99 @@ export default function UniversePropertyEditor() {
             </span>
           </div>
         </div>
+
+        {/* FLIP Settings Section - Only show when FLIP is selected */}
+        {implementation === Implementation.Flip && (
+          <div className="border-t border-gray-200 pt-3 mt-3">
+            <label className="text-sm font-medium text-gray-700 block mb-2">
+              FLIP Settings
+            </label>
+
+            {/* FLIP/PIC Ratio Slider */}
+            <div className="space-y-1">
+              <label className="text-sm font-medium text-gray-700">
+                PIC/FLIP Ratio:
+              </label>
+              <input
+                type="range"
+                min="0"
+                max="1"
+                step="0.1"
+                value={flipRatio}
+                onChange={(e) => {
+                  const val = parseFloat(e.target.value);
+                  setFlipRatio(val);
+                  (universe as any).set_flip_ratio(val);
+                  setRender((prev) => prev + 1);
+                }}
+                className="w-full h-2 bg-gray-200 rounded-lg appearance-none cursor-pointer"
+              />
+              <div className="flex justify-between text-xs text-gray-500">
+                <span>0 (PIC - Viscous)</span>
+                <span>{flipRatio.toFixed(1)}</span>
+                <span>1 (FLIP - Splashy)</span>
+              </div>
+              <span className="text-xs text-gray-500 block mt-1">
+                PIC is stable but loses energy. FLIP preserves velocity but can
+                be noisy. Default: 0.9
+              </span>
+            </div>
+
+            {/* Compensate Drift Toggle */}
+            <div className="flex items-center justify-between mt-3">
+              <div>
+                <label className="text-sm font-medium text-gray-700">
+                  Compensate Drift
+                </label>
+                <p className="text-xs text-gray-500">
+                  Prevents volume loss over time
+                </p>
+              </div>
+              <button
+                onClick={() => {
+                  const newValue = !compensateDrift;
+                  setCompensateDrift(newValue);
+                  (universe as any).set_compensate_drift(newValue);
+                  setRender((prev) => prev + 1);
+                }}
+                className={`px-3 py-1 rounded text-sm transition-all duration-200 ${
+                  compensateDrift
+                    ? "bg-blue-500 text-white"
+                    : "bg-gray-200 text-gray-700"
+                }`}
+              >
+                {compensateDrift ? "ON" : "OFF"}
+              </button>
+            </div>
+
+            {/* Separate Particles Toggle */}
+            <div className="flex items-center justify-between mt-3">
+              <div>
+                <label className="text-sm font-medium text-gray-700">
+                  Separate Particles
+                </label>
+                <p className="text-xs text-gray-500">
+                  Push particles apart to prevent clumping
+                </p>
+              </div>
+              <button
+                onClick={() => {
+                  const newValue = !separateParticles;
+                  setSeparateParticles(newValue);
+                  (universe as any).set_separate_particles(newValue);
+                  setRender((prev) => prev + 1);
+                }}
+                className={`px-3 py-1 rounded text-sm transition-all duration-200 ${
+                  separateParticles
+                    ? "bg-blue-500 text-white"
+                    : "bg-gray-200 text-gray-700"
+                }`}
+              >
+                {separateParticles ? "ON" : "OFF"}
+              </button>
+            </div>
+          </div>
+        )}
       </div>
     </div>
   );

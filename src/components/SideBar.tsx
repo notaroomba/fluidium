@@ -1,27 +1,58 @@
 import { useSimulation } from "../contexts/SimulationContext";
 import type { ToolMode, BrushType } from "../contexts/SimulationContext";
-import { 
-  Pencil, 
-  Eraser, 
-  MousePointer2, 
-  Droplets, 
-  Square, 
+import { useState, useEffect } from "react";
+import {
+  Pencil,
+  Eraser,
+  MousePointer2,
+  Droplets,
+  Square,
   Wind,
   Minus,
-  Plus
+  Plus,
+  Circle,
 } from "lucide-react";
 
 export default function SideBar() {
-  const { 
-    universe, 
-    setRender, 
-    toolMode, 
-    setToolMode, 
-    brushType, 
+  const {
+    universe,
+    setRender,
+    toolMode,
+    setToolMode,
+    brushType,
     setBrushType,
     brushSize,
-    setBrushSize
+    setBrushSize,
   } = useSimulation();
+
+  // Ball (obstacle) state
+  const [showBall, setShowBall] = useState(() => {
+    const u = universe as any;
+    return u.get_show_obstacle ? u.get_show_obstacle() : false;
+  });
+  const [ballSize, setBallSize] = useState(() => {
+    const u = universe as any;
+    return u.get_obstacle_radius
+      ? Math.round(u.get_obstacle_radius() * 100)
+      : 15;
+  });
+
+  // Sync ball state with universe
+  useEffect(() => {
+    const u = universe as any;
+    if (u.set_show_obstacle) {
+      u.set_show_obstacle(showBall);
+      setRender((prev) => prev + 1);
+    }
+  }, [showBall]);
+
+  useEffect(() => {
+    const u = universe as any;
+    if (u.set_obstacle_radius) {
+      u.set_obstacle_radius(ballSize / 100);
+      setRender((prev) => prev + 1);
+    }
+  }, [ballSize]);
 
   const handleToolChange = (mode: ToolMode) => {
     setToolMode(mode);
@@ -121,7 +152,9 @@ export default function SideBar() {
               >
                 <Minus className="w-4 h-4 sm:w-5 sm:h-5" />
               </button>
-              <span className="w-8 text-center text-sm font-medium">{brushSize}</span>
+              <span className="w-8 text-center text-sm font-medium">
+                {brushSize}
+              </span>
               <button
                 onClick={() => adjustBrushSize(10)}
                 className="p-1.5 sm:p-2 rounded cursor-pointer transition-all duration-200 hover:bg-gray-100"
@@ -168,6 +201,57 @@ export default function SideBar() {
               <Square className="w-4 h-4 sm:w-5 sm:h-5" />
             </button>
           </div>
+        </div>
+
+        {/* Ball/Obstacle Controls */}
+        <div className="flex flex-col items-center gap-2 py-2">
+          <span className="text-xs text-gray-500 font-medium">Ball</span>
+          <button
+            onClick={() => setShowBall(!showBall)}
+            className={`p-1.5 sm:p-2 rounded cursor-pointer transition-all duration-200 ${
+              showBall ? "bg-blue-100" : "hover:bg-gray-100"
+            }`}
+            title={showBall ? "Hide Ball" : "Show Ball"}
+          >
+            <Circle
+              className={`w-4 h-4 sm:w-5 sm:h-5 ${
+                showBall ? "text-blue-600" : "text-gray-500"
+              }`}
+            />
+          </button>
+          {showBall && (
+            <div className="flex flex-col items-center gap-1">
+              <span className="text-xs text-gray-400">Size</span>
+              <div className="flex items-center gap-1">
+                <button
+                  onClick={() => setBallSize(Math.max(5, ballSize - 2))}
+                  className="p-1 rounded cursor-pointer transition-all duration-200 hover:bg-gray-100"
+                  title="Decrease ball size"
+                >
+                  <Minus className="w-3 h-3" />
+                </button>
+                <span className="w-6 text-center text-xs font-medium">
+                  {ballSize}
+                </span>
+                <button
+                  onClick={() => setBallSize(Math.min(40, ballSize + 2))}
+                  className="p-1 rounded cursor-pointer transition-all duration-200 hover:bg-gray-100"
+                  title="Increase ball size"
+                >
+                  <Plus className="w-3 h-3" />
+                </button>
+              </div>
+              <input
+                type="range"
+                min="5"
+                max="40"
+                value={ballSize}
+                onChange={(e) => setBallSize(parseInt(e.target.value))}
+                className="w-16 h-1.5 bg-gray-200 rounded-lg appearance-none cursor-pointer"
+                title="Ball size"
+              />
+            </div>
+          )}
         </div>
 
         {/* Particle Count */}
