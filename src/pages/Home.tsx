@@ -42,16 +42,11 @@ const PixiCanvas = memo(function PixiCanvas({
 });
 
 function HomeContent({ universe }: { universe: Universe }) {
-  const {
-    setShowEquipotentialLines,
-    setShowFieldLines,
-    showEquipotentialLines,
-    showFieldLines,
-  } = useSimulation();
+  const { setShowGrid, setShowVelocity } = useSimulation();
   useEffect(() => {
-    setShowEquipotentialLines(true);
-    setShowFieldLines(true);
-  }, [showEquipotentialLines, showFieldLines]);
+    setShowGrid(false);
+    setShowVelocity(false);
+  }, [setShowGrid, setShowVelocity]);
   return (
     <Transitions>
       <PixiCanvas universe={universe} />
@@ -73,35 +68,14 @@ function HomeContent({ universe }: { universe: Universe }) {
 }
 
 export default function Home() {
-  const [width, height] = useWindowDimension();
-  const universeRef = useRef<Universe>(Universe.new_empty());
+  const universeRef = useRef<Universe>(new Universe());
 
   useEffect(() => {
-    // Initialize universe
+    // Initialize universe with a fluid scene
     const universe = universeRef.current;
-    // Use physical Coulomb constant by default
-    universe.set_coulomb_constant(8.9875517923e3);
-    universe.set_default_charge(1.0);
-
-    // Add random particles in a loop
-    const addRandomParticles = () => {
-      const count = universe.get_particles().length;
-      if (count < 10) {
-        for (let i = 0; i < 1; i++) {
-          const x = Math.random() * width - width / 2;
-          const y = Math.random() * 200;
-          universe.add_particle_simple(x, y, 0.0, 0.0, Math.random() * 40 - 20);
-        }
-      }
-    };
-
-    addRandomParticles();
-    const interval = setInterval(addRandomParticles, 1000);
-
-    return () => {
-      clearInterval(interval);
-    };
-  }, [width, height]);
+    // Setup wind tunnel scene (scene 1) for the home page background
+    universe.setup_scene(1, 16.0, 9.0);
+  }, []);
 
   return (
     <SimulationProvider universe={universeRef.current}>

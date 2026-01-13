@@ -147,7 +147,9 @@ export default function SandBox({ universe }: SandBoxProps) {
       // Draw fluid particles
       for (const particle of particles) {
         graphics.circle(particle.pos.x, particle.pos.y, particleRadius);
-        graphics.fill({ color: particle.color, alpha: 0.9 });
+        // Convert ARGB (u32) to RGB by masking off the alpha channel
+        const rgbColor = particle.color & 0x00ffffff;
+        graphics.fill({ color: rgbColor, alpha: 0.9 });
       }
 
       // Draw velocity vectors if enabled

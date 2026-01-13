@@ -4,15 +4,15 @@ import {
   Play,
   FastForward,
   RotateCcw,
-  Calculator,
-  Waves,
   Maximize2,
   Settings,
   Grid3x3,
   Navigation,
+  Calculator,
+  Layers,
 } from "lucide-react";
 import { Implementation } from "physics-engine";
-import { useEffect, useState } from "react";
+import { useState, useEffect } from "react";
 import { useSimulation } from "../contexts/SimulationContext";
 
 export default function SettingsBar() {
@@ -28,27 +28,29 @@ export default function SettingsBar() {
     isPaused,
     setIsPaused,
   } = useSimulation();
-  
+
+  // Speed control
+  const multipliers = [-4, -2, -1, -0.5, -0.25, 0, 0.25, 0.5, 1, 2, 4];
+  const [multiplier, setMultiplier] = useState(() => {
+    return universe.get_speed();
+  });
+
+  // Implementation
   const [implementation, setImplementation] = useState<Implementation>(
     universe.get_implementation()
   );
 
-  // Speed multipliers
-  const multipliers = [0.25, 0.5, 1, 2, 4];
-  const [multiplier, setMultiplier] = useState(() => {
-    const current = universe.get_speed();
-    return current;
-  });
+  // Density view
+  const [showDensity, setShowDensity] = useState(universe.get_show_density());
 
   useEffect(() => {
     universe.set_implementation(implementation);
-    console.log("Implementation set to", implementation);
   }, [implementation]);
 
   useEffect(() => {
-    universe.set_is_paused(isPaused);
+    universe.set_show_density(showDensity);
     setRender((prev) => prev + 1);
-  }, [isPaused]);
+  }, [showDensity]);
 
   const rewind = () => {
     const currentIndex = multipliers.indexOf(multiplier);
@@ -69,6 +71,7 @@ export default function SettingsBar() {
   };
 
   const reset = () => {
+    // Reset to blank canvas
     universe.reset();
     setMultiplier(1);
     universe.set_speed(1.0);
@@ -95,7 +98,7 @@ export default function SettingsBar() {
       {/* Settings Bar */}
       <div className="w-fit max-w-full py-2 px-2 sm:px-4 bg-white border pointer-events-auto border-gray-200 rounded-lg shadow-xl overflow-x-auto">
         <div className="flex items-center justify-center divide-x divide-gray-300 flex-wrap sm:flex-nowrap gap-y-2">
-          {/* Integration Method */}
+          {/* Implementation Selection */}
           <div className="flex items-center gap-1 sm:gap-2 px-2 sm:px-4">
             <button
               onClick={() => setImplementation(Implementation.Euler)}
@@ -104,20 +107,9 @@ export default function SettingsBar() {
                   ? "bg-blue-100"
                   : "hover:bg-gray-100"
               }`}
-              title="Euler Method (Simple)"
+              title="Euler Method"
             >
               <Calculator className="w-4 h-4 sm:w-5 sm:h-5" />
-            </button>
-            <button
-              onClick={() => setImplementation(Implementation.FLIP)}
-              className={`p-1.5 sm:p-2 rounded cursor-pointer transition-all duration-200 ${
-                implementation === Implementation.FLIP
-                  ? "bg-blue-100"
-                  : "hover:bg-gray-100"
-              }`}
-              title="FLIP Method (More Realistic)"
-            >
-              <Waves className="w-4 h-4 sm:w-5 sm:h-5" />
             </button>
           </div>
 
@@ -127,7 +119,6 @@ export default function SettingsBar() {
               onClick={() => {
                 const newValue = !showGrid;
                 setShowGrid(newValue);
-                universe.set_show_grid(newValue);
                 setRender((prev) => prev + 1);
               }}
               className={`p-1.5 sm:p-2 rounded cursor-pointer transition-all duration-200 ${
@@ -141,31 +132,36 @@ export default function SettingsBar() {
               onClick={() => {
                 const newValue = !showVelocity;
                 setShowVelocity(newValue);
-                universe.set_show_velocity(newValue);
                 setRender((prev) => prev + 1);
               }}
               className={`p-1.5 sm:p-2 rounded cursor-pointer transition-all duration-200 ${
                 showVelocity ? "bg-blue-100" : "hover:bg-gray-100"
               }`}
               title={
-                showVelocity
-                  ? "Hide Velocity Vectors"
-                  : "Show Velocity Vectors"
+                showVelocity ? "Hide Velocity Vectors" : "Show Velocity Vectors"
               }
             >
               <Navigation className="w-4 h-4 sm:w-5 sm:h-5" />
             </button>
+            <button
+              onClick={() => {
+                setShowDensity(!showDensity);
+              }}
+              className={`p-1.5 sm:p-2 rounded cursor-pointer transition-all duration-200 ${
+                showDensity ? "bg-blue-100" : "hover:bg-gray-100"
+              }`}
+              title={showDensity ? "Hide Density" : "Show Density"}
+            >
+              <Layers className="w-4 h-4 sm:w-5 sm:h-5" />
+            </button>
           </div>
 
-          {/* Playback Controls */}
+          {/* Playback Controls with Speed */}
           <div className="flex items-center gap-1 sm:gap-2 px-2 sm:px-4">
-            <div className="w-8 sm:w-12 text-center text-xs sm:text-base">
-              <p>{multiplier}x</p>
-            </div>
             <button
               onClick={rewind}
-              className={`p-1.5 sm:p-2 rounded cursor-pointer transition-all duration-200 active:bg-blue-200 hover:bg-gray-100`}
-              title="Slower"
+              className="p-1.5 sm:p-2 hover:bg-gray-100 rounded cursor-pointer transition-all duration-200"
+              title="Slow Down"
             >
               <Rewind className="w-4 h-4 sm:w-5 sm:h-5" />
             </button>
@@ -182,11 +178,14 @@ export default function SettingsBar() {
             </button>
             <button
               onClick={fastForward}
-              className={`p-1.5 sm:p-2 rounded cursor-pointer transition-all duration-200 active:bg-blue-200 hover:bg-gray-100`}
-              title="Faster"
+              className="p-1.5 sm:p-2 hover:bg-gray-100 rounded cursor-pointer transition-all duration-200"
+              title="Speed Up"
             >
               <FastForward className="w-4 h-4 sm:w-5 sm:h-5" />
             </button>
+            <span className="text-xs sm:text-sm font-medium text-gray-700 min-w-12 text-center">
+              {multiplier}x
+            </span>
             <button
               onClick={reset}
               className={`p-1.5 sm:p-2 rounded cursor-pointer transition-all duration-200 active:bg-blue-200 hover:bg-gray-100`}
@@ -205,11 +204,7 @@ export default function SettingsBar() {
               className={`p-1.5 sm:p-2 hover:bg-gray-100 rounded cursor-pointer transition-all duration-200 ${
                 isUniverseEditorOpen ? "bg-blue-100" : ""
               }`}
-              title={
-                isUniverseEditorOpen
-                  ? "Close Settings"
-                  : "Open Settings"
-              }
+              title={isUniverseEditorOpen ? "Close Settings" : "Open Settings"}
             >
               <Settings className="w-4 h-4 sm:w-5 sm:h-5" />
             </button>

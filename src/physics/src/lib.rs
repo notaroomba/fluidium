@@ -1,1672 +1,1192 @@
-use rand::Rng;
 use wasm_bindgen::prelude::*;
 use serde::{ Serialize, Deserialize };
-use core::ops;
-use std::vec;
 
-// Vec2 for 2D particle motion (y-axis is up)
+// Field type constants
+pub const U_FIELD: u8 = 0;
+pub const V_FIELD: u8 = 1;
+pub const S_FIELD: u8 = 2;
+
+// Vec2 for positions and velocities
 #[wasm_bindgen]
-#[derive(Serialize, Deserialize, Clone, PartialEq, Copy, Default)]
+#[derive(Serialize, Deserialize, Clone, Copy, Default)]
 pub struct Vec2 {
-    pub x: f64,
-    pub y: f64,
+    pub x: f32,
+    pub y: f32,
 }
+
 #[wasm_bindgen]
 impl Vec2 {
     #[wasm_bindgen(constructor)]
-    pub fn new(x: f64, y: f64) -> Self {
+    pub fn new(x: f32, y: f32) -> Self {
         Self { x, y }
     }
-    pub fn distance_from(&self, other: Vec2) -> f64 {
-        f64::sqrt(f64::powi(self.x - other.x, 2) + f64::powi(self.y - other.y, 2))
-    }
-    pub fn magnitude(&self) -> f64 {
-        f64::sqrt(self.x * self.x + self.y * self.y)
-    }
-    pub fn normalize(&self) -> Vec2 {
-        let mag = self.magnitude();
-        if mag > 0.0 {
-            Vec2::new(self.x / mag, self.y / mag)
-        } else {
-            Vec2::new(0.0, 0.0)
-        }
-    }
-}
-impl ops::Add for Vec2 {
-    type Output = Vec2;
-    fn add(self, rhs: Self) -> Self::Output {
-        Vec2 {
-            x: self.x + rhs.x,
-            y: self.y + rhs.y,
-        }
-    }
-}
-impl ops::Sub for Vec2 {
-    type Output = Vec2;
-    fn sub(self, rhs: Self) -> Self::Output {
-        Vec2 {
-            x: self.x - rhs.x,
-            y: self.y - rhs.y,
-        }
-    }
-}
-impl ops::AddAssign for Vec2 {
-    fn add_assign(&mut self, other: Self) {
-        *self = Self {
-            x: self.x + other.x,
-            y: self.y + other.y,
-        };
-    }
-}
-impl ops::DivAssign<f64> for Vec2 {
-    fn div_assign(&mut self, d: f64) {
-        self.x /= d;
-        self.y /= d;
-    }
-}
-impl ops::Mul<f64> for Vec2 {
-    type Output = Self;
-    fn mul(self, m: f64) -> Self {
-        Self::new(self.x * m, self.y * m)
-    }
-}
-impl ops::Div<f64> for Vec2 {
-    type Output = Self;
-    fn div(self, m: f64) -> Self {
-        Self::new(self.x / m, self.y / m)
-    }
 }
 
+// Fluid particle for rendering
 #[wasm_bindgen]
-#[derive(Serialize, Deserialize, PartialEq, Clone)]
-pub struct Trail {
-    pub pos: Vec2,
-    pub color: u32,
-}
-
-#[wasm_bindgen]
-#[derive(Serialize, Deserialize, PartialEq, Clone)]
-pub struct Particle {
+#[derive(Serialize, Deserialize, Clone)]
+pub struct FluidParticle {
     pub pos: Vec2,
     pub vel: Vec2,
-    pub acc: Vec2,
-    trail: Vec<Trail>,
-    pub radius: f32,
-    pub mass: f64,
     pub color: u32,
-    // Charge in Coulombs
-    pub charge: f64,
-    pub fixed: bool,
 }
+
 #[wasm_bindgen]
-impl Particle {
+impl FluidParticle {
     #[wasm_bindgen(constructor)]
-    pub fn new(
-        px: f64,
-        py: f64,
-        radius: f32,
-        mass: f64,
-        color: u32,
-        vx: f64,
-        vy: f64,
-        charge: f64 // previously drag_coefficient
-    ) -> Particle {
-        Particle {
-            pos: Vec2::new(px, py),
+    pub fn new(x: f32, y: f32, vx: f32, vy: f32, color: u32) -> Self {
+        Self {
+            pos: Vec2::new(x, y),
             vel: Vec2::new(vx, vy),
-            acc: Vec2::new(0.0, 0.0),
-            radius,
-            mass,
             color,
-            charge,
-            trail: vec![],
-            fixed: false,
         }
-    }
-
-    pub fn new_simple(px: f64, py: f64, radius: f32, mass: f64, color: u32) -> Particle {
-        Particle {
-            pos: Vec2::new(px, py),
-            vel: Vec2::new(0.0, 0.0),
-            acc: Vec2::new(0.0, 0.0),
-            radius,
-            mass,
-            color,
-            charge: 0.0, // default charge set by Universe when added simply
-            trail: vec![],
-            fixed: false,
-        }
-    }
-
-    pub fn get_charge(&self) -> f64 {
-        self.charge
-    }
-    pub fn set_charge(&mut self, charge: f64) {
-        self.charge = charge;
-    }
-
-    pub fn get_trail(&self) -> Vec<Trail> {
-        self.trail.clone()
-    }
-
-    pub fn add_trail_point(&mut self, pos: Vec2, color: u32, max: usize) {
-        self.trail.push(Trail { pos, color });
-        if self.trail.len() > max {
-            self.trail.remove(0);
-        }
-    }
-
-    pub fn get_data(&self) -> JsValue {
-        serde_wasm_bindgen::to_value(&self).unwrap()
-    }
-
-    pub fn is_fixed(&self) -> bool {
-        self.fixed
-    }
-    pub fn set_fixed(&mut self, f: bool) {
-        self.fixed = f;
     }
 }
 
+// Implementation enum for solver type
 #[wasm_bindgen]
 #[derive(Serialize, Deserialize, Clone, Copy, PartialEq)]
 pub enum Implementation {
-    Euler,
-    RK4,
-    Verlet,
-    Leapfrog,
-}
-
-// Quadtree node used for Barnes-Hut approximation of Coulomb forces
-#[wasm_bindgen]
-#[derive(Serialize, Deserialize, Clone, Default)]
-pub struct QuadTreeNode {
-    charge: f64,
-    center_of_charge: Vec2,
-    dimensions: Vec2,
-    center: Vec2,
-    children: Option<[Box<QuadTreeNode>; 4]>,
-    particles: Vec<Particle>,
-}
-
-#[wasm_bindgen]
-impl QuadTreeNode {
-    fn new(dimensions: Vec2, center: Vec2) -> QuadTreeNode {
-        QuadTreeNode {
-            charge: 0.0,
-            center_of_charge: Vec2::new(0.0, 0.0),
-            dimensions,
-            center,
-            children: None,
-            particles: Vec::with_capacity(2),
-        }
-    }
-
-    fn add_particle(&mut self, particle: &Particle) {
-        if self.children.is_none() {
-            self.particles.push(particle.clone());
-            if self.particles.len() > 1 {
-                self.subdivide();
-            }
-        } else {
-            let quadrant: usize = self.get_quadrant(&Vec2::new(particle.pos.x, particle.pos.y));
-            if let Some(children) = &mut self.children {
-                children[quadrant].add_particle(particle);
-            }
-        }
-    }
-
-    fn subdivide(&mut self) {
-        // no particles -> nothing to subdivide
-        if self.particles.is_empty() {
-            return;
-        }
-        let new_dimensions: Vec2 = Vec2::new(self.dimensions.x / 2.0, self.dimensions.y / 2.0);
-        let child_centers: [Vec2; 4] = [
-            self.center + Vec2::new(new_dimensions.x / 2.0, new_dimensions.y / 2.0),
-            self.center + Vec2::new(-new_dimensions.x / 2.0, new_dimensions.y / 2.0),
-            self.center + Vec2::new(-new_dimensions.x / 2.0, -new_dimensions.y / 2.0),
-            self.center + Vec2::new(new_dimensions.x / 2.0, -new_dimensions.y / 2.0),
-        ];
-        let mut children: [Box<QuadTreeNode>; 4] = Default::default();
-        for i in 0..4 {
-            children[i] = Box::new(QuadTreeNode::new(new_dimensions, child_centers[i]));
-        }
-        for particle in &self.particles {
-            let quadrant: usize = self.get_quadrant(&Vec2::new(particle.pos.x, particle.pos.y));
-            children[quadrant].add_particle(particle);
-        }
-        self.children = Some(children);
-        self.particles.clear();
-    }
-
-    fn get_quadrant(&self, position: &Vec2) -> usize {
-        if position.x >= self.center.x && position.y >= self.center.y {
-            0
-        } else if position.x <= self.center.x && position.y >= self.center.y {
-            1
-        } else if position.x <= self.center.x && position.y <= self.center.y {
-            2
-        } else {
-            3
-        }
-    }
-
-    fn update_center_of_charge(&mut self) {
-        if self.particles.len() == 1 {
-            self.charge = self.particles[0].charge;
-            self.center_of_charge = Vec2::new(self.particles[0].pos.x, self.particles[0].pos.y);
-        } else if let Some(children) = &mut self.children {
-            self.charge = 0.0;
-            self.center_of_charge = Vec2::new(0.0, 0.0);
-            for child in children.iter_mut() {
-                child.update_center_of_charge();
-                self.charge += child.charge;
-                self.center_of_charge += child.center_of_charge * child.charge;
-            }
-            if self.charge != 0.0 {
-                self.center_of_charge /= self.charge;
-            } else {
-                self.center_of_charge = self.center;
-            }
-        } else {
-            self.charge = 0.0;
-            self.center_of_charge = Vec2::new(0.0, 0.0);
-        }
-    }
-
-    fn rebuild(&mut self, particles: &Vec<Particle>, dimensions: Vec2, center: Vec2) {
-        *self = QuadTreeNode::new(dimensions, center);
-        for particle in particles {
-            self.add_particle(particle);
-        }
-        self.update_center_of_charge();
-    }
-
-    pub fn get_data(&self) -> JsValue {
-        serde_wasm_bindgen::to_value(&self).unwrap()
-    }
+    Euler = 0,
 }
 
 #[wasm_bindgen]
 #[derive(Serialize, Deserialize, Clone)]
+pub struct Fluid {
+    density: f32,
+    num_x: usize,
+    num_y: usize,
+    num_cells: usize,
+    h: f32,
+    u: Vec<f32>,
+    v: Vec<f32>,
+    new_u: Vec<f32>,
+    new_v: Vec<f32>,
+    p: Vec<f32>,
+    s: Vec<f32>,
+    m: Vec<f32>,
+    new_m: Vec<f32>,
+}
+
+impl Fluid {
+    pub fn new(density: f32, num_x: usize, num_y: usize, h: f32) -> Fluid {
+        let actual_num_x = num_x + 2;
+        let actual_num_y = num_y + 2;
+        let num_cells = actual_num_x * actual_num_y;
+
+        let mut m = vec![0.0_f32; num_cells];
+        m.fill(1.0);
+
+        Fluid {
+            density,
+            num_x: actual_num_x,
+            num_y: actual_num_y,
+            num_cells,
+            h,
+            u: vec![0.0; num_cells],
+            v: vec![0.0; num_cells],
+            new_u: vec![0.0; num_cells],
+            new_v: vec![0.0; num_cells],
+            p: vec![0.0; num_cells],
+            s: vec![0.0; num_cells],
+            m,
+            new_m: vec![0.0; num_cells],
+        }
+    }
+
+    pub fn integrate(&mut self, dt: f32, gravity: f32) {
+        let n = self.num_y;
+        for i in 1..self.num_x {
+            for j in 1..self.num_y - 1 {
+                if self.s[i * n + j] != 0.0 && self.s[i * n + j - 1] != 0.0 {
+                    self.v[i * n + j] += gravity * dt;
+                }
+            }
+        }
+    }
+
+    pub fn solve_incompressibility(&mut self, num_iters: usize, dt: f32, over_relaxation: f32) {
+        let n = self.num_y;
+        let cp = (self.density * self.h) / dt;
+
+        for _ in 0..num_iters {
+            for i in 1..self.num_x - 1 {
+                for j in 1..self.num_y - 1 {
+                    if self.s[i * n + j] == 0.0 {
+                        continue;
+                    }
+
+                    let sx0 = self.s[(i - 1) * n + j];
+                    let sx1 = self.s[(i + 1) * n + j];
+                    let sy0 = self.s[i * n + j - 1];
+                    let sy1 = self.s[i * n + j + 1];
+                    let s = sx0 + sx1 + sy0 + sy1;
+                    if s == 0.0 {
+                        continue;
+                    }
+
+                    let div =
+                        self.u[(i + 1) * n + j] -
+                        self.u[i * n + j] +
+                        self.v[i * n + j + 1] -
+                        self.v[i * n + j];
+
+                    let mut p = -div / s;
+                    p *= over_relaxation;
+                    self.p[i * n + j] += cp * p;
+
+                    self.u[i * n + j] -= sx0 * p;
+                    self.u[(i + 1) * n + j] += sx1 * p;
+                    self.v[i * n + j] -= sy0 * p;
+                    self.v[i * n + j + 1] += sy1 * p;
+                }
+            }
+        }
+    }
+
+    pub fn extrapolate(&mut self) {
+        let n = self.num_y;
+        for i in 0..self.num_x {
+            self.u[i * n + 0] = self.u[i * n + 1];
+            self.u[i * n + self.num_y - 1] = self.u[i * n + self.num_y - 2];
+        }
+        for j in 0..self.num_y {
+            self.v[0 * n + j] = self.v[1 * n + j];
+            self.v[(self.num_x - 1) * n + j] = self.v[(self.num_x - 2) * n + j];
+        }
+    }
+
+    pub fn sample_field(&self, x: f32, y: f32, field: u8) -> f32 {
+        let n = self.num_y;
+        let h = self.h;
+        let h1 = 1.0 / h;
+        let h2 = 0.5 * h;
+
+        let x = x.max(h).min((self.num_x as f32) * h);
+        let y = y.max(h).min((self.num_y as f32) * h);
+
+        let (dx, dy, f): (f32, f32, &Vec<f32>) = match field {
+            U_FIELD => (0.0, h2, &self.u),
+            V_FIELD => (h2, 0.0, &self.v),
+            S_FIELD => (h2, h2, &self.m),
+            _ => (h2, h2, &self.m),
+        };
+
+        let x0 = (((x - dx) * h1).floor() as usize).min(self.num_x - 1);
+        let tx = (x - dx - (x0 as f32) * h) * h1;
+        let x1 = (x0 + 1).min(self.num_x - 1);
+
+        let y0 = (((y - dy) * h1).floor() as usize).min(self.num_y - 1);
+        let ty = (y - dy - (y0 as f32) * h) * h1;
+        let y1 = (y0 + 1).min(self.num_y - 1);
+
+        let sx = 1.0 - tx;
+        let sy = 1.0 - ty;
+
+        sx * sy * f[x0 * n + y0] +
+            tx * sy * f[x1 * n + y0] +
+            tx * ty * f[x1 * n + y1] +
+            sx * ty * f[x0 * n + y1]
+    }
+
+    pub fn avg_u(&self, i: usize, j: usize) -> f32 {
+        let n = self.num_y;
+        (self.u[i * n + j - 1] +
+            self.u[i * n + j] +
+            self.u[(i + 1) * n + j - 1] +
+            self.u[(i + 1) * n + j]) *
+            0.25
+    }
+
+    pub fn avg_v(&self, i: usize, j: usize) -> f32 {
+        let n = self.num_y;
+        (self.v[(i - 1) * n + j] +
+            self.v[i * n + j] +
+            self.v[(i - 1) * n + j + 1] +
+            self.v[i * n + j + 1]) *
+            0.25
+    }
+
+    pub fn advect_vel(&mut self, dt: f32) {
+        self.new_u.copy_from_slice(&self.u);
+        self.new_v.copy_from_slice(&self.v);
+
+        let n = self.num_y;
+        let h = self.h;
+        let h2 = 0.5 * h;
+
+        for i in 1..self.num_x {
+            for j in 1..self.num_y {
+                // u component
+                if self.s[i * n + j] != 0.0 && self.s[(i - 1) * n + j] != 0.0 && j < self.num_y - 1 {
+                    let mut x = (i as f32) * h;
+                    let mut y = (j as f32) * h + h2;
+                    let u = self.u[i * n + j];
+                    let v = self.avg_v(i, j);
+                    x = x - dt * u;
+                    y = y - dt * v;
+                    let u = self.sample_field(x, y, U_FIELD);
+                    self.new_u[i * n + j] = u;
+                }
+                // v component
+                if self.s[i * n + j] != 0.0 && self.s[i * n + j - 1] != 0.0 && i < self.num_x - 1 {
+                    let mut x = (i as f32) * h + h2;
+                    let mut y = (j as f32) * h;
+                    let u = self.avg_u(i, j);
+                    let v = self.v[i * n + j];
+                    x = x - dt * u;
+                    y = y - dt * v;
+                    let v = self.sample_field(x, y, V_FIELD);
+                    self.new_v[i * n + j] = v;
+                }
+            }
+        }
+
+        self.u.copy_from_slice(&self.new_u);
+        self.v.copy_from_slice(&self.new_v);
+    }
+
+    pub fn advect_smoke(&mut self, dt: f32) {
+        self.new_m.copy_from_slice(&self.m);
+
+        let n = self.num_y;
+        let h = self.h;
+        let h2 = 0.5 * h;
+
+        for i in 1..self.num_x - 1 {
+            for j in 1..self.num_y - 1 {
+                if self.s[i * n + j] != 0.0 {
+                    let u = (self.u[i * n + j] + self.u[(i + 1) * n + j]) * 0.5;
+                    let v = (self.v[i * n + j] + self.v[i * n + j + 1]) * 0.5;
+                    let x = (i as f32) * h + h2 - dt * u;
+                    let y = (j as f32) * h + h2 - dt * v;
+
+                    self.new_m[i * n + j] = self.sample_field(x, y, S_FIELD);
+                }
+            }
+        }
+        self.m.copy_from_slice(&self.new_m);
+    }
+
+    // Enforce boundary conditions - zero velocities at solid boundaries
+    pub fn enforce_boundaries(&mut self) {
+        let n = self.num_y;
+
+        for i in 0..self.num_x {
+            for j in 0..self.num_y {
+                if self.s[i * n + j] == 0.0 {
+                    // This cell is solid - zero all velocities touching it
+                    self.u[i * n + j] = 0.0;
+                    self.v[i * n + j] = 0.0;
+                    if i + 1 < self.num_x {
+                        self.u[(i + 1) * n + j] = 0.0;
+                    }
+                    if j + 1 < self.num_y {
+                        self.v[i * n + j + 1] = 0.0;
+                    }
+                }
+            }
+        }
+    }
+
+    pub fn simulate(&mut self, dt: f32, gravity: f32, num_iters: usize, over_relaxation: f32) {
+        // Enforce boundaries before simulation
+        self.enforce_boundaries();
+
+        self.integrate(dt, gravity);
+
+        self.p.fill(0.0);
+        self.solve_incompressibility(num_iters, dt, over_relaxation);
+
+        self.extrapolate();
+        self.advect_vel(dt);
+        self.advect_smoke(dt);
+
+        // Enforce boundaries after simulation
+        self.enforce_boundaries();
+    }
+
+    pub fn get_u(&self, i: usize, j: usize) -> f32 {
+        let n = self.num_y;
+        self.u[i * n + j]
+    }
+
+    pub fn get_v(&self, i: usize, j: usize) -> f32 {
+        let n = self.num_y;
+        self.v[i * n + j]
+    }
+
+    pub fn get_p(&self, i: usize, j: usize) -> f32 {
+        let n = self.num_y;
+        self.p[i * n + j]
+    }
+
+    pub fn get_s(&self, i: usize, j: usize) -> f32 {
+        let n = self.num_y;
+        self.s[i * n + j]
+    }
+
+    pub fn get_m(&self, i: usize, j: usize) -> f32 {
+        let n = self.num_y;
+        self.m[i * n + j]
+    }
+}
+
+// Helper function to get scientific color mapping
+#[wasm_bindgen]
+pub fn get_sci_color(val: f32, min_val: f32, max_val: f32) -> Vec<u8> {
+    let val = val.max(min_val).min(max_val - 0.0001);
+    let d = max_val - min_val;
+    let val = if d == 0.0 { 0.5 } else { (val - min_val) / d };
+    let m = 0.25_f32;
+    let num = (val / m).floor() as i32;
+    let s = (val - (num as f32) * m) / m;
+
+    let (r, g, b) = match num {
+        0 => (0.0, s, 1.0),
+        1 => (0.0, 1.0, 1.0 - s),
+        2 => (s, 1.0, 0.0),
+        3 => (1.0, 1.0 - s, 0.0),
+        _ => (1.0, 0.0, 0.0),
+    };
+
+    vec![(255.0 * r) as u8, (255.0 * g) as u8, (255.0 * b) as u8, 255]
+}
+
+// Main Universe struct - all simulation logic integrated here
+#[wasm_bindgen]
+#[derive(Serialize, Deserialize, Clone)]
 pub struct Universe {
-    particles: Vec<Particle>,
-    magnets: Vec<Magnet>,
-    // Coulomb constant (k = 8.9875517923e9 N·m^2/C^2)
-    coulomb_constant: f64,
-    air_density: f64, // repurposed: default charge
-    show_trails: bool,
-    is_paused: bool,
+    // Fluid grid
+    fluid: Option<Fluid>,
+
+    // Simulation parameters
+    gravity: f32,
+    dt: f32,
+    num_iters: usize,
+    frame_nr: u32,
+    over_relaxation: f32,
+
+    // Wind
+    wind_x: f32,
+    wind_y: f32,
+
+    // Emitter
+    emitter_enabled: bool,
+    emitter_x: f32,
+    emitter_y: f32,
+    emitter_radius: f32,
+    max_particles: usize,
+
+    // Obstacle
+    obstacle_x: f32,
+    obstacle_y: f32,
+    obstacle_radius: f32,
+
+    // State
+    paused: bool,
+    scene_nr: u8,
+
+    // Visualization flags
+    show_obstacle: bool,
+    show_streamlines: bool,
+    show_velocities: bool,
+    show_pressure: bool,
+    show_smoke: bool,
+    show_density: bool,
+
+    // Rendering parameters
+    particle_radius: f32,
+    cell_size: f32,
+
+    // Speed control
+    speed: f32,
+
+    // Implementation type
     implementation: Implementation,
-    speed: f64,
-    default_mass: f64,
-    // Whether to use individual particle mass in acceleration calculations
-    mass_calculation: bool,
-    default_charge: f64, // renamed from default_drag_coefficient
-    spawn_range: f64, // configurable spawn range for new particles (±units)
-    wind_x: f64,
-    wind_y: f64,
-    // Minimum interaction distance to avoid Coulomb singularities
-    min_interaction_distance: f64,
-    // quadtree options
-    use_quadtree: bool,
-    quadtree_theta: f64,
-    quadtree: QuadTreeNode,
-    quadtree_threshold: usize,
-    // collisions
-    collisions_enabled: bool,
-    restitution: f64, // coefficient of restitution (0..1)
 }
 
 #[wasm_bindgen]
 impl Universe {
     #[wasm_bindgen(constructor)]
     pub fn new() -> Universe {
-        Universe::new_with_defaults(true)
+        let mut universe = Universe {
+            fluid: None,
+            gravity: 0.0, // Wind tunnel default (no gravity)
+            dt: 1.0 / 60.0, // 60 FPS
+            num_iters: 40, // Solver iterations
+            frame_nr: 0,
+            over_relaxation: 1.9, // SOR acceleration
+            wind_x: 2.0, // Default wind from left
+            wind_y: 0.0,
+            emitter_enabled: true,
+            emitter_x: 0.0, // Left side emitter
+            emitter_y: 0.5, // Center height
+            emitter_radius: 0.1, // 10% of domain height
+            max_particles: 10000,
+            obstacle_x: 0.0,
+            obstacle_y: 0.0,
+            obstacle_radius: 0.15,
+            paused: false,
+            scene_nr: 0,
+            show_obstacle: false,
+            show_streamlines: false,
+            show_velocities: false,
+            show_pressure: false,
+            show_smoke: true,
+            show_density: false,
+            particle_radius: 4.0,
+            cell_size: 10.0,
+            speed: 1.0,
+            implementation: Implementation::Euler,
+        };
+        // Initialize with blank canvas
+        universe.setup_blank(16.0, 9.0);
+        universe
     }
 
-    pub fn new_empty() -> Universe {
-        Universe::new_with_defaults(false)
-    }
+    pub fn setup_scene(&mut self, scene_nr: u8, sim_width: f32, sim_height: f32) {
+        self.scene_nr = scene_nr;
+        self.obstacle_radius = 0.15;
+        self.over_relaxation = 1.9;
+        self.dt = 1.0 / 60.0;
+        self.num_iters = 40;
 
-    fn new_with_defaults(with_defaults: bool) -> Universe {
-        let particles = if with_defaults {
-            // sample charge setup: positive/negative pair and a third neutral-ish
-            let p1 = Particle::new(-200.0, 0.0, 10.0, 1.0, 0xff0000, 0.0, 0.0, 20.0); // positive
-            let p2 = Particle::new(200.0, 0.0, 10.0, 1.0, 0xff0000, 0.0, 0.0, 20.0); // positive
-            let p3 = Particle::new(0.0, 200.0, 10.0, 0.8, 0x0000ff, 0.0, 0.0, -20.0); // negative
-            let p4 = Particle::new(0.0, -200.0, 10.0, 0.8, 0x0000ff, 0.0, 0.0, -20.0); // negative
-            vec![p1, p2, p3, p4]
-        } else {
-            vec![]
+        let res: usize = match scene_nr {
+            0 => 50, // Tank
+            3 => 200, // Hires Tunnel
+            _ => 100, // Wind Tunnel, Paint
         };
 
-        Universe {
-            particles,
-            magnets: vec![],
-            coulomb_constant: 8.9875517923e3, // Coulomb constant (N·m²/C²)
-            air_density: 1.0, // default charge
-            wind_x: 0.0,
-            wind_y: 0.0,
-            implementation: Implementation::Euler,
-            speed: 1.0,
-            show_trails: true,
-            is_paused: false,
-            default_mass: 1.0,
-            mass_calculation: true,
-            default_charge: 1.0, // default charge when adding simple
-            spawn_range: 200.0, // default spawn spread in simulation units
-            min_interaction_distance: 10.0, // default minimum distance (simulation units)
-            use_quadtree: false,
-            quadtree_theta: 0.5,
-            quadtree: QuadTreeNode::new(Vec2::new(2000.0, 2000.0), Vec2::new(0.0, 0.0)),
-            quadtree_threshold: 150,
-            collisions_enabled: false,
-            restitution: 1.0,
+        let domain_height = 1.0_f32;
+        let domain_width = (domain_height / sim_height) * sim_width;
+        let h = domain_height / (res as f32);
+
+        let num_x = (domain_width / h).floor() as usize;
+        let num_y = (domain_height / h).floor() as usize;
+
+        let density = 1000.0_f32;
+
+        let mut f = Fluid::new(density, num_x, num_y, h);
+        let n = f.num_y;
+
+        match scene_nr {
+            0 => {
+                // Tank
+                for i in 0..f.num_x {
+                    for j in 0..f.num_y {
+                        let mut s = 1.0_f32;
+                        if i == 0 || i == f.num_x - 1 || j == 0 {
+                            s = 0.0;
+                        }
+                        f.s[i * n + j] = s;
+                    }
+                }
+                self.gravity = -9.81;
+                self.show_pressure = true;
+                self.show_smoke = false;
+                self.show_streamlines = false;
+                self.show_velocities = false;
+            }
+            1 | 3 => {
+                // Wind Tunnel / Hires Tunnel
+                let in_vel = 2.0_f32;
+                for i in 0..f.num_x {
+                    for j in 0..f.num_y {
+                        let mut s = 1.0_f32;
+                        if i == 0 || j == 0 || j == f.num_y - 1 {
+                            s = 0.0;
+                        }
+                        f.s[i * n + j] = s;
+
+                        if i == 1 {
+                            f.u[i * n + j] = in_vel;
+                        }
+                    }
+                }
+
+                let pipe_h = (0.1 * (f.num_y as f32)) as usize;
+                let min_j = (0.5 * (f.num_y as f32) - 0.5 * (pipe_h as f32)) as usize;
+                let max_j = (0.5 * (f.num_y as f32) + 0.5 * (pipe_h as f32)) as usize;
+
+                for j in min_j..max_j {
+                    f.m[j] = 0.0;
+                }
+
+                self.fluid = Some(f);
+                self.set_obstacle(0.4, 0.5, true);
+
+                self.gravity = 0.0;
+                self.show_pressure = false;
+                self.show_smoke = true;
+                self.show_streamlines = false;
+                self.show_velocities = false;
+
+                if scene_nr == 3 {
+                    self.dt = 1.0 / 120.0;
+                    self.num_iters = 100;
+                    self.show_pressure = true;
+                }
+                return;
+            }
+            2 => {
+                // Paint
+                self.gravity = 0.0;
+                self.over_relaxation = 1.0;
+                self.show_pressure = false;
+                self.show_smoke = true;
+                self.show_streamlines = false;
+                self.show_velocities = false;
+                self.obstacle_radius = 0.1;
+            }
+            _ => {}
+        }
+
+        self.fluid = Some(f);
+    }
+
+    // Setup a blank canvas with no walls at all - adaptive size
+    pub fn setup_blank(&mut self, sim_width: f32, sim_height: f32) {
+        self.scene_nr = 255; // Blank canvas marker
+        self.obstacle_radius = 0.15;
+        self.over_relaxation = 1.9;
+        self.dt = 1.0 / 60.0;
+        self.num_iters = 40;
+        self.gravity = 0.0;
+        self.wind_x = 2.0; // Default wind from left
+        self.wind_y = 0.0;
+
+        // Use larger grid for more space
+        let res: usize = 100;
+        let domain_height = 1.0_f32;
+        let domain_width = (domain_height / sim_height) * sim_width;
+        let h = domain_height / (res as f32);
+
+        let num_x = (domain_width / h).floor() as usize;
+        let num_y = (domain_height / h).floor() as usize;
+
+        let density = 1000.0_f32;
+
+        let mut f = Fluid::new(density, num_x, num_y, h);
+        let n = f.num_y;
+
+        // All cells are fluid - no boundary walls
+        for i in 0..f.num_x {
+            for j in 0..f.num_y {
+                f.s[i * n + j] = 1.0; // All fluid
+            }
+        }
+
+        // Set initial velocity from wind at left edge
+        for j in 0..f.num_y {
+            f.u[1 * n + j] = self.wind_x;
+            f.v[1 * n + j] = self.wind_y;
+        }
+
+        self.show_pressure = false;
+        self.show_smoke = true;
+        self.show_streamlines = false;
+        self.show_velocities = false;
+
+        self.fluid = Some(f);
+    }
+
+    // Get the bounding box of all particles (smoke cells)
+    pub fn get_particle_bounds(&self) -> Vec<f32> {
+        if let Some(ref f) = self.fluid {
+            let n = f.num_y;
+            let mut min_x = f32::MAX;
+            let mut min_y = f32::MAX;
+            let mut max_x = f32::MIN;
+            let mut max_y = f32::MIN;
+            let mut has_particles = false;
+
+            for i in 1..f.num_x - 1 {
+                for j in 1..f.num_y - 1 {
+                    if f.m[i * n + j] < 0.99 && f.s[i * n + j] != 0.0 {
+                        let x = ((i as f32) + 0.5) * self.cell_size;
+                        let y = ((j as f32) + 0.5) * self.cell_size;
+                        min_x = min_x.min(x);
+                        min_y = min_y.min(y);
+                        max_x = max_x.max(x);
+                        max_y = max_y.max(y);
+                        has_particles = true;
+                    }
+                }
+            }
+
+            if has_particles {
+                vec![min_x, min_y, max_x, max_y]
+            } else {
+                // Return grid center if no particles
+                let cx = ((f.num_x as f32) * self.cell_size) / 2.0;
+                let cy = ((f.num_y as f32) * self.cell_size) / 2.0;
+                vec![cx - 100.0, cy - 100.0, cx + 100.0, cy + 100.0]
+            }
+        } else {
+            vec![0.0, 0.0, 100.0, 100.0]
         }
     }
 
-    pub fn time_step(&mut self, dt: f64) -> u8 {
-        if self.particles.is_empty() || self.is_paused {
-            return 1;
+    // Get total grid dimensions in pixels
+    pub fn get_grid_dimensions(&self) -> Vec<f32> {
+        if let Some(ref f) = self.fluid {
+            vec![(f.num_x as f32) * self.cell_size, (f.num_y as f32) * self.cell_size]
+        } else {
+            vec![0.0, 0.0]
         }
-
-        let speed_multiplier = self.speed * 2.0;
-        let steps = (speed_multiplier.abs() * 50.0).ceil().max(1.0) as usize;
-        let sub_dt = (dt * speed_multiplier) / (steps as f64);
-
-        for _ in 0..steps {
-            let result = self.single_physics_step(sub_dt);
-            if result != 0 {
-                return result;
-            }
-        }
-
-        if self.show_trails {
-            for p in &mut self.particles {
-                p.add_trail_point(p.pos, p.color, 250);
-            }
-        }
-
-        return 0;
     }
 
-    fn single_physics_step(&mut self, dt: f64) -> u8 {
-        match self.implementation {
-            Implementation::Euler => {
-                let accelerations = if self.use_quadtree {
-                    self.calculate_electrostatic_accelerations_quadtree()
-                } else {
-                    self.calculate_electrostatic_accelerations()
-                };
+    pub fn set_obstacle(&mut self, x: f32, y: f32, reset: bool) {
+        let mut vx = 0.0_f32;
+        let mut vy = 0.0_f32;
 
-                if accelerations.iter().any(|acc| (acc.x.is_nan() || acc.y.is_nan())) {
-                    return 1;
-                }
+        if !reset {
+            vx = (x - self.obstacle_x) / self.dt;
+            vy = (y - self.obstacle_y) / self.dt;
+        }
 
-                for i in 0..self.particles.len() {
-                    if !self.particles[i].fixed {
-                        self.particles[i].vel.x += accelerations[i].x * dt;
-                        self.particles[i].vel.y += accelerations[i].y * dt;
-                        self.particles[i].pos.x += self.particles[i].vel.x * dt;
-                        self.particles[i].pos.y += self.particles[i].vel.y * dt;
+        self.obstacle_x = x;
+        self.obstacle_y = y;
+        let r = self.obstacle_radius;
+
+        if let Some(ref mut f) = self.fluid {
+            let n = f.num_y;
+
+            for i in 1..f.num_x - 2 {
+                for j in 1..f.num_y - 2 {
+                    f.s[i * n + j] = 1.0;
+
+                    let dx = ((i as f32) + 0.5) * f.h - x;
+                    let dy = ((j as f32) + 0.5) * f.h - y;
+
+                    if dx * dx + dy * dy < r * r {
+                        f.s[i * n + j] = 0.0;
+                        if self.scene_nr == 2 {
+                            f.m[i * n + j] = 0.5 + 0.5 * (0.1 * (self.frame_nr as f32)).sin();
+                        } else {
+                            f.m[i * n + j] = 1.0;
+                        }
+                        f.u[i * n + j] = vx;
+                        f.u[(i + 1) * n + j] = vx;
+                        f.v[i * n + j] = vy;
+                        f.v[i * n + j + 1] = vy;
                     }
-                    self.particles[i].acc = accelerations[i];
-                }
-
-                // Update magnets (simple explicit integration per substep)
-                let magnet_accs = self.calculate_magnet_accelerations();
-                if magnet_accs.iter().any(|a| (a.x.is_nan() || a.y.is_nan())) {
-                    return 1;
-                }
-                for mi in 0..self.magnets.len() {
-                    if !self.magnets[mi].fixed {
-                        self.magnets[mi].vel.x += magnet_accs[mi].x * dt;
-                        self.magnets[mi].vel.y += magnet_accs[mi].y * dt;
-                        self.magnets[mi].pos.x += self.magnets[mi].vel.x * dt;
-                        self.magnets[mi].pos.y += self.magnets[mi].vel.y * dt;
-                    }
-                    self.magnets[mi].acc = magnet_accs[mi];
-                }
-
-                if self.collisions_enabled {
-                    self.handle_collisions();
-                }
-            }
-            Implementation::RK4 => {
-                // 2D RK4 implementation
-                let initial_positions: Vec<Vec2> = self.particles
-                    .iter()
-                    .map(|p| p.pos)
-                    .collect();
-                let initial_velocities: Vec<Vec2> = self.particles
-                    .iter()
-                    .map(|p| p.vel)
-                    .collect();
-
-                let k1_acc = self.calculate_electrostatic_accelerations_for_state(
-                    &initial_positions,
-                    &initial_velocities
-                );
-                let k1_vel = initial_velocities.clone();
-
-                let mut k2_positions = Vec::with_capacity(self.particles.len());
-                let mut k2_velocities = Vec::with_capacity(self.particles.len());
-                for i in 0..self.particles.len() {
-                    k2_positions.push(initial_positions[i] + k1_vel[i] * (dt * 0.5));
-                    k2_velocities.push(initial_velocities[i] + k1_acc[i] * (dt * 0.5));
-                }
-                let k2_acc = self.calculate_electrostatic_accelerations_for_state(
-                    &k2_positions,
-                    &k2_velocities
-                );
-
-                let mut k3_positions = Vec::with_capacity(self.particles.len());
-                let mut k3_velocities = Vec::with_capacity(self.particles.len());
-                for i in 0..self.particles.len() {
-                    k3_positions.push(initial_positions[i] + k2_velocities[i] * (dt * 0.5));
-                    k3_velocities.push(initial_velocities[i] + k2_acc[i] * (dt * 0.5));
-                }
-                let k3_acc = self.calculate_electrostatic_accelerations_for_state(
-                    &k3_positions,
-                    &k3_velocities
-                );
-
-                let mut k4_positions = Vec::with_capacity(self.particles.len());
-                let mut k4_velocities = Vec::with_capacity(self.particles.len());
-                for i in 0..self.particles.len() {
-                    k4_positions.push(initial_positions[i] + k3_velocities[i] * dt);
-                    k4_velocities.push(initial_velocities[i] + k3_acc[i] * dt);
-                }
-                let k4_acc = self.calculate_electrostatic_accelerations_for_state(
-                    &k4_positions,
-                    &k4_velocities
-                );
-
-                // NaN check
-                if
-                    k1_acc.iter().any(|a| (a.x.is_nan() || a.y.is_nan())) ||
-                    k2_acc.iter().any(|a| (a.x.is_nan() || a.y.is_nan())) ||
-                    k3_acc.iter().any(|a| (a.x.is_nan() || a.y.is_nan())) ||
-                    k4_acc.iter().any(|a| (a.x.is_nan() || a.y.is_nan()))
-                {
-                    return 1;
-                }
-
-                for i in 0..self.particles.len() {
-                    self.particles[i].pos.x +=
-                        ((k1_vel[i].x +
-                            2.0 * k2_velocities[i].x +
-                            2.0 * k3_velocities[i].x +
-                            k4_velocities[i].x) *
-                            dt) /
-                        6.0;
-                    self.particles[i].pos.y +=
-                        ((k1_vel[i].y +
-                            2.0 * k2_velocities[i].y +
-                            2.0 * k3_velocities[i].y +
-                            k4_velocities[i].y) *
-                            dt) /
-                        6.0;
-
-                    if !self.particles[i].fixed {
-                        self.particles[i].vel.x +=
-                            ((k1_acc[i].x + 2.0 * k2_acc[i].x + 2.0 * k3_acc[i].x + k4_acc[i].x) *
-                                dt) /
-                            6.0;
-                        self.particles[i].vel.y +=
-                            ((k1_acc[i].y + 2.0 * k2_acc[i].y + 2.0 * k3_acc[i].y + k4_acc[i].y) *
-                                dt) /
-                            6.0;
-                    }
-
-                    self.particles[i].acc = k1_acc[i];
-                }
-
-                // Integrate magnets (after RK4 particles update)
-                let magnet_accs = self.calculate_magnet_accelerations();
-                if magnet_accs.iter().any(|a| (a.x.is_nan() || a.y.is_nan())) {
-                    return 1;
-                }
-                for mi in 0..self.magnets.len() {
-                    if !self.magnets[mi].fixed {
-                        self.magnets[mi].vel.x += magnet_accs[mi].x * dt;
-                        self.magnets[mi].vel.y += magnet_accs[mi].y * dt;
-                        self.magnets[mi].pos.x += self.magnets[mi].vel.x * dt;
-                        self.magnets[mi].pos.y += self.magnets[mi].vel.y * dt;
-                    }
-                    self.magnets[mi].acc = magnet_accs[mi];
-                }
-
-                if self.collisions_enabled {
-                    self.handle_collisions();
-                }
-            }
-            Implementation::Verlet => {
-                let accelerations = self.calculate_electrostatic_accelerations();
-                if accelerations.iter().any(|a| (a.x.is_nan() || a.y.is_nan())) {
-                    return 1;
-                }
-
-                let mut new_positions = Vec::with_capacity(self.particles.len());
-                for i in 0..self.particles.len() {
-                    new_positions.push(
-                        Vec2::new(
-                            self.particles[i].pos.x +
-                                self.particles[i].vel.x * dt +
-                                0.5 * accelerations[i].x * dt * dt,
-                            self.particles[i].pos.y +
-                                self.particles[i].vel.y * dt +
-                                0.5 * accelerations[i].y * dt * dt
-                        )
-                    );
-                }
-
-                let new_acc = self.calculate_electrostatic_accelerations_for_state(
-                    &new_positions,
-                    &self.particles
-                        .iter()
-                        .map(|p| p.vel)
-                        .collect::<Vec<_>>()
-                );
-                if new_acc.iter().any(|a| (a.x.is_nan() || a.y.is_nan())) {
-                    return 1;
-                }
-
-                for i in 0..self.particles.len() {
-                    if !self.particles[i].fixed {
-                        self.particles[i].vel.x += 0.5 * (accelerations[i].x + new_acc[i].x) * dt;
-                        self.particles[i].vel.y += 0.5 * (accelerations[i].y + new_acc[i].y) * dt;
-                        self.particles[i].pos = new_positions[i];
-                    }
-                    self.particles[i].acc = new_acc[i];
-                }
-
-                // Update magnets (Verlet integration: explicit update per substep)
-                let magnet_accs = self.calculate_magnet_accelerations();
-                if magnet_accs.iter().any(|a| (a.x.is_nan() || a.y.is_nan())) {
-                    return 1;
-                }
-                for mi in 0..self.magnets.len() {
-                    if !self.magnets[mi].fixed {
-                        self.magnets[mi].vel.x += magnet_accs[mi].x * dt;
-                        self.magnets[mi].vel.y += magnet_accs[mi].y * dt;
-                        self.magnets[mi].pos.x += self.magnets[mi].vel.x * dt;
-                        self.magnets[mi].pos.y += self.magnets[mi].vel.y * dt;
-                    }
-                    self.magnets[mi].acc = magnet_accs[mi];
-                }
-
-                if self.collisions_enabled {
-                    self.handle_collisions();
-                }
-            }
-            Implementation::Leapfrog => {
-                let accelerations = self.calculate_electrostatic_accelerations();
-                if accelerations.iter().any(|a| (a.x.is_nan() || a.y.is_nan())) {
-                    return 1;
-                }
-
-                let mut velocities_half = Vec::with_capacity(self.particles.len());
-                for i in 0..self.particles.len() {
-                    velocities_half.push(
-                        Vec2::new(
-                            self.particles[i].vel.x + accelerations[i].x * (dt / 2.0),
-                            self.particles[i].vel.y + accelerations[i].y * (dt / 2.0)
-                        )
-                    );
-                }
-
-                let mut new_positions = Vec::with_capacity(self.particles.len());
-                for i in 0..self.particles.len() {
-                    new_positions.push(
-                        Vec2::new(
-                            self.particles[i].pos.x + velocities_half[i].x * dt,
-                            self.particles[i].pos.y + velocities_half[i].y * dt
-                        )
-                    );
-                }
-
-                let new_acc = self.calculate_electrostatic_accelerations_for_state(
-                    &new_positions,
-                    &velocities_half
-                );
-                if new_acc.iter().any(|a| (a.x.is_nan() || a.y.is_nan())) {
-                    return 1;
-                }
-
-                for i in 0..self.particles.len() {
-                    if !self.particles[i].fixed {
-                        self.particles[i].pos = new_positions[i];
-                        self.particles[i].vel.x = velocities_half[i].x + new_acc[i].x * (dt / 2.0);
-                        self.particles[i].vel.y = velocities_half[i].y + new_acc[i].y * (dt / 2.0);
-                    }
-                    self.particles[i].acc = new_acc[i];
-                }
-
-                // Update magnets (Leapfrog - explicit per substep)
-                let magnet_accs = self.calculate_magnet_accelerations();
-                if magnet_accs.iter().any(|a| (a.x.is_nan() || a.y.is_nan())) {
-                    return 1;
-                }
-                for mi in 0..self.magnets.len() {
-                    if !self.magnets[mi].fixed {
-                        self.magnets[mi].vel.x += magnet_accs[mi].x * dt;
-                        self.magnets[mi].vel.y += magnet_accs[mi].y * dt;
-                        self.magnets[mi].pos.x += self.magnets[mi].vel.x * dt;
-                        self.magnets[mi].pos.y += self.magnets[mi].vel.y * dt;
-                    }
-                    self.magnets[mi].acc = magnet_accs[mi];
-                }
-
-                if self.collisions_enabled {
-                    self.handle_collisions();
                 }
             }
         }
 
+        self.show_obstacle = true;
+    }
+
+    pub fn simulate(&mut self) {
+        if !self.paused {
+            // Get current particle count before mutable borrow
+            let current_particles = self.get_particle_count();
+            let emitter_enabled = self.emitter_enabled;
+            let max_particles = self.max_particles;
+            let emitter_x = self.emitter_x;
+            let emitter_y = self.emitter_y;
+            let emitter_radius = self.emitter_radius;
+            let wind_x = self.wind_x;
+            let wind_y = self.wind_y;
+
+            if let Some(ref mut f) = self.fluid {
+                let n = f.num_y;
+
+                // Apply wind at the inlet (left side)
+                for j in 0..f.num_y {
+                    if f.s[1 * n + j] != 0.0 {
+                        f.u[1 * n + j] = wind_x;
+                        f.v[1 * n + j] = wind_y;
+                    }
+                }
+
+                // Emit particles from emitter if enabled and under max count
+                if emitter_enabled && current_particles < max_particles {
+                    let emitter_i = ((emitter_x * (f.num_x as f32)) as usize)
+                        .min(f.num_x - 2)
+                        .max(1);
+                    let emitter_j = ((emitter_y * (f.num_y as f32)) as usize)
+                        .min(f.num_y - 2)
+                        .max(1);
+                    let emit_radius = ((emitter_radius * (f.num_y as f32)) as i32).max(1);
+
+                    for di in -emit_radius..=emit_radius {
+                        for dj in -emit_radius..=emit_radius {
+                            let i = ((emitter_i as i32) + di) as usize;
+                            let j = ((emitter_j as i32) + dj) as usize;
+
+                            if i >= 1 && i < f.num_x - 1 && j >= 1 && j < f.num_y - 1 {
+                                let dist_sq = (di * di + dj * dj) as f32;
+                                let r_sq = (emit_radius * emit_radius) as f32;
+
+                                if dist_sq <= r_sq && f.s[i * n + j] != 0.0 {
+                                    f.m[i * n + j] = 0.0; // Emit smoke/fluid
+                                }
+                            }
+                        }
+                    }
+                }
+
+                // Apply speed multiplier to dt
+                let effective_dt = self.dt * self.speed.abs();
+                if self.speed != 0.0 {
+                    f.simulate(effective_dt, self.gravity, self.num_iters, self.over_relaxation);
+                }
+            }
+        }
+        self.frame_nr += 1;
+    }
+
+    pub fn time_step(&mut self, _dt: f32) -> u8 {
+        if self.paused {
+            return 0;
+        }
+        self.simulate();
         0
     }
 
-    // Naive O(n^2) Coulomb acceleration calculation (2D)
-    fn calculate_electrostatic_accelerations(&self) -> Vec<Vec2> {
-        let n = self.particles.len();
-        let mut accelerations = vec![Vec2::new(0.0, 0.0); n];
-
-        for i in 0..n {
-            let qi = self.particles[i].charge; // charge
-            let mi = if self.mass_calculation { self.particles[i].mass } else { self.default_mass };
-            for j in 0..n {
-                if i == j {
-                    continue;
-                }
-                let qj = self.particles[j].charge;
-
-                let rx = self.particles[i].pos.x - self.particles[j].pos.x; // r = r_i - r_j
-                let ry = self.particles[i].pos.y - self.particles[j].pos.y;
-                let dist_sq = rx * rx + ry * ry;
-                // Softening: enforce a minimum interaction distance to avoid singularities
-                let min_dist = self.min_interaction_distance; // use configured softening distance
-                let min_dist_sq = min_dist * min_dist;
-                let safe_dist_sq = if dist_sq < min_dist_sq { min_dist_sq } else { dist_sq };
-                let dist = f64::sqrt(safe_dist_sq);
-
-                if dist > 1e-8 {
-                    // Coulomb: F = k * qi * qj / r^2 * r_hat (where r_hat points from j->i)
-                    let force_magnitude = (self.coulomb_constant * qi * qj) / safe_dist_sq;
-                    let acc_magnitude = force_magnitude / mi;
-                    accelerations[i].x += acc_magnitude * (rx / dist);
-                    accelerations[i].y += acc_magnitude * (ry / dist);
-                }
-            }
-
-            // Magnet dipole contributions: treat each magnet as two poles (+/- strength/2)
-            for m in &self.magnets {
-                let half = (m.size as f64) * 0.5;
-                let ux = f64::cos(m.angle);
-                let uy = f64::sin(m.angle);
-                let north = Vec2::new(m.pos.x + ux * half, m.pos.y + uy * half);
-                let south = Vec2::new(m.pos.x - ux * half, m.pos.y - uy * half);
-                let pole_n = m.strength * 0.5; // north pole pseudo-charge
-                let pole_s = -m.strength * 0.5; // south pole pseudo-charge
-
-                // north pole
-                {
-                    let rx = self.particles[i].pos.x - north.x;
-                    let ry = self.particles[i].pos.y - north.y;
-                    let dist_sq = rx * rx + ry * ry;
-                    let min_dist = self.min_interaction_distance;
-                    let min_dist_sq = min_dist * min_dist;
-                    let safe_dist_sq = if dist_sq < min_dist_sq { min_dist_sq } else { dist_sq };
-                    let dist = f64::sqrt(safe_dist_sq);
-                    if dist > 1e-8 {
-                        let force_magnitude = (self.coulomb_constant * qi * pole_n) / safe_dist_sq;
-                        let acc_magnitude = force_magnitude / mi;
-                        accelerations[i].x += acc_magnitude * (rx / dist);
-                        accelerations[i].y += acc_magnitude * (ry / dist);
-                    }
-                }
-
-                // south pole
-                {
-                    let rx = self.particles[i].pos.x - south.x;
-                    let ry = self.particles[i].pos.y - south.y;
-                    let dist_sq = rx * rx + ry * ry;
-                    let min_dist = self.min_interaction_distance;
-                    let min_dist_sq = min_dist * min_dist;
-                    let safe_dist_sq = if dist_sq < min_dist_sq { min_dist_sq } else { dist_sq };
-                    let dist = f64::sqrt(safe_dist_sq);
-                    if dist > 1e-8 {
-                        let force_magnitude = (self.coulomb_constant * qi * pole_s) / safe_dist_sq;
-                        let acc_magnitude = force_magnitude / mi;
-                        accelerations[i].x += acc_magnitude * (rx / dist);
-                        accelerations[i].y += acc_magnitude * (ry / dist);
-                    }
-                }
-            }
-        }
-
-        accelerations
-    }
-
-    fn calculate_electrostatic_accelerations_for_state(
-        &self,
-        positions: &[Vec2],
-        _velocities: &[Vec2]
-    ) -> Vec<Vec2> {
-        let n = positions.len();
-        let mut accelerations = vec![Vec2::new(0.0, 0.0); n];
-
-        for i in 0..n {
-            let qi = self.particles[i].charge;
-            let mi = if self.mass_calculation { self.particles[i].mass } else { self.default_mass };
-            for j in 0..n {
-                if i == j {
-                    continue;
-                }
-                let qj = self.particles[j].charge;
-                let rx = positions[i].x - positions[j].x;
-                let ry = positions[i].y - positions[j].y;
-                let dist_sq = rx * rx + ry * ry;
-                // Softening to avoid singularities in intermediate state calculations
-                let min_dist = self.min_interaction_distance; // use configured softening distance
-                let min_dist_sq = min_dist * min_dist;
-                let safe_dist_sq = if dist_sq < min_dist_sq { min_dist_sq } else { dist_sq };
-                let dist = f64::sqrt(safe_dist_sq);
-                if dist > 1e-8 {
-                    let force_magnitude = (self.coulomb_constant * qi * qj) / safe_dist_sq;
-                    let acc_magnitude = force_magnitude / mi;
-                    accelerations[i].x += acc_magnitude * (rx / dist);
-                    accelerations[i].y += acc_magnitude * (ry / dist);
-                }
-            }
-
-            // Include magnet dipole contributions using magnet positions from self
-            for m in &self.magnets {
-                let half = (m.size as f64) * 0.5;
-                let ux = f64::cos(m.angle);
-                let uy = f64::sin(m.angle);
-                let north = Vec2::new(m.pos.x + ux * half, m.pos.y + uy * half);
-                let south = Vec2::new(m.pos.x - ux * half, m.pos.y - uy * half);
-                let pole_n = m.strength * 0.5;
-                let pole_s = -m.strength * 0.5;
-
-                // North pole contribution
-                {
-                    let rx = positions[i].x - north.x;
-                    let ry = positions[i].y - north.y;
-                    let dist_sq = rx * rx + ry * ry;
-                    let min_dist = self.min_interaction_distance;
-                    let min_dist_sq = min_dist * min_dist;
-                    let safe_dist_sq = if dist_sq < min_dist_sq { min_dist_sq } else { dist_sq };
-                    let dist = f64::sqrt(safe_dist_sq);
-                    if dist > 1e-8 {
-                        let force_magnitude = (self.coulomb_constant * qi * pole_n) / safe_dist_sq;
-                        let acc_magnitude = force_magnitude / mi;
-                        accelerations[i].x += acc_magnitude * (rx / dist);
-                        accelerations[i].y += acc_magnitude * (ry / dist);
-                    }
-                }
-
-                // South pole contribution
-                {
-                    let rx = positions[i].x - south.x;
-                    let ry = positions[i].y - south.y;
-                    let dist_sq = rx * rx + ry * ry;
-                    let min_dist = self.min_interaction_distance;
-                    let min_dist_sq = min_dist * min_dist;
-                    let safe_dist_sq = if dist_sq < min_dist_sq { min_dist_sq } else { dist_sq };
-                    let dist = f64::sqrt(safe_dist_sq);
-                    if dist > 1e-8 {
-                        let force_magnitude = (self.coulomb_constant * qi * pole_s) / safe_dist_sq;
-                        let acc_magnitude = force_magnitude / mi;
-                        accelerations[i].x += acc_magnitude * (rx / dist);
-                        accelerations[i].y += acc_magnitude * (ry / dist);
-                    }
-                }
-            }
-        }
-
-        accelerations
-    }
-
-    // Compute accelerations on magnets due to particles and other magnets (dipole approximation)
-    fn calculate_magnet_accelerations(&self) -> Vec<Vec2> {
-        let mcount = self.magnets.len();
-        let mut accs = vec![Vec2::new(0.0, 0.0); mcount];
-        if mcount == 0 {
-            return accs;
-        }
-
-        // Precompute particle charges/positions
-        for i in 0..mcount {
-            let m = &self.magnets[i];
-            let half = (m.size as f64) * 0.5;
-            let ux = f64::cos(m.angle);
-            let uy = f64::sin(m.angle);
-            let north = Vec2::new(m.pos.x + ux * half, m.pos.y + uy * half);
-            let south = Vec2::new(m.pos.x - ux * half, m.pos.y - uy * half);
-            let pole_i_n = m.strength * 0.5;
-            let pole_i_s = -m.strength * 0.5;
-
-            // Contribution from particles
-            for p in &self.particles {
-                let qi = p.charge;
-                // force on north pole due to particle
-                let rxn = north.x - p.pos.x;
-                let ryn = north.y - p.pos.y;
-                let dist_sq_n = rxn * rxn + ryn * ryn;
-                let min_dist = self.min_interaction_distance;
-                let min_dist_sq = min_dist * min_dist;
-                let safe_dist_sq_n = if dist_sq_n < min_dist_sq { min_dist_sq } else { dist_sq_n };
-                let dist_n = f64::sqrt(safe_dist_sq_n);
-                if dist_n > 1e-8 {
-                    let force_mag_n = (self.coulomb_constant * qi * pole_i_n) / safe_dist_sq_n;
-                    accs[i].x += (force_mag_n * (rxn / dist_n)) / m.mass;
-                    accs[i].y += (force_mag_n * (ryn / dist_n)) / m.mass;
-                }
-
-                // force on south pole due to particle
-                let rxs = south.x - p.pos.x;
-                let rys = south.y - p.pos.y;
-                let dist_sq_s = rxs * rxs + rys * rys;
-                let safe_dist_sq_s = if dist_sq_s < min_dist_sq { min_dist_sq } else { dist_sq_s };
-                let dist_s = f64::sqrt(safe_dist_sq_s);
-                if dist_s > 1e-8 {
-                    let force_mag_s = (self.coulomb_constant * qi * pole_i_s) / safe_dist_sq_s;
-                    accs[i].x += (force_mag_s * (rxs / dist_s)) / m.mass;
-                    accs[i].y += (force_mag_s * (rys / dist_s)) / m.mass;
-                }
-            }
-
-            // Contribution from other magnets (pole-pole interactions)
-            for j in 0..mcount {
-                if i == j {
-                    continue;
-                }
-                let other = &self.magnets[j];
-                let half_o = (other.size as f64) * 0.5;
-                let ux_o = f64::cos(other.angle);
-                let uy_o = f64::sin(other.angle);
-                let north_o = Vec2::new(other.pos.x + ux_o * half_o, other.pos.y + uy_o * half_o);
-                let south_o = Vec2::new(other.pos.x - ux_o * half_o, other.pos.y - uy_o * half_o);
-                let pole_j_n = other.strength * 0.5;
-                let pole_j_s = -other.strength * 0.5;
-
-                // i.north with j.north
-                let rx = north.x - north_o.x;
-                let ry = north.y - north_o.y;
-                let dist_sq = rx * rx + ry * ry;
-                let min_dist = self.min_interaction_distance;
-                let min_dist_sq = min_dist * min_dist;
-                let safe_dist_sq = if dist_sq < min_dist_sq { min_dist_sq } else { dist_sq };
-                let dist = f64::sqrt(safe_dist_sq);
-                if dist > 1e-8 {
-                    let force_mag = (self.coulomb_constant * pole_i_n * pole_j_n) / safe_dist_sq;
-                    accs[i].x += (force_mag * (rx / dist)) / m.mass;
-                    accs[i].y += (force_mag * (ry / dist)) / m.mass;
-                }
-
-                // i.north with j.south
-                let rx = north.x - south_o.x;
-                let ry = north.y - south_o.y;
-                let dist_sq = rx * rx + ry * ry;
-                let safe_dist_sq = if dist_sq < min_dist_sq { min_dist_sq } else { dist_sq };
-                let dist = f64::sqrt(safe_dist_sq);
-                if dist > 1e-8 {
-                    let force_mag = (self.coulomb_constant * pole_i_n * pole_j_s) / safe_dist_sq;
-                    accs[i].x += (force_mag * (rx / dist)) / m.mass;
-                    accs[i].y += (force_mag * (ry / dist)) / m.mass;
-                }
-
-                // i.south with j.north
-                let rx = south.x - north_o.x;
-                let ry = south.y - north_o.y;
-                let dist_sq = rx * rx + ry * ry;
-                let safe_dist_sq = if dist_sq < min_dist_sq { min_dist_sq } else { dist_sq };
-                let dist = f64::sqrt(safe_dist_sq);
-                if dist > 1e-8 {
-                    let force_mag = (self.coulomb_constant * pole_i_s * pole_j_n) / safe_dist_sq;
-                    accs[i].x += (force_mag * (rx / dist)) / m.mass;
-                    accs[i].y += (force_mag * (ry / dist)) / m.mass;
-                }
-
-                // i.south with j.south
-                let rx = south.x - south_o.x;
-                let ry = south.y - south_o.y;
-                let dist_sq = rx * rx + ry * ry;
-                let safe_dist_sq = if dist_sq < min_dist_sq { min_dist_sq } else { dist_sq };
-                let dist = f64::sqrt(safe_dist_sq);
-                if dist > 1e-8 {
-                    let force_mag = (self.coulomb_constant * pole_i_s * pole_j_s) / safe_dist_sq;
-                    accs[i].x += (force_mag * (rx / dist)) / m.mass;
-                    accs[i].y += (force_mag * (ry / dist)) / m.mass;
-                }
-            }
-        }
-
-        accs
-    }
-
-    // Collision handling (elastic collisions)
-    fn handle_collisions(&mut self) {
-        let n = self.particles.len();
-        for i in 0..n {
-            for j in i + 1..n {
-                let dx = self.particles[i].pos.x - self.particles[j].pos.x;
-                let dy = self.particles[i].pos.y - self.particles[j].pos.y;
-                let dist = f64::sqrt(dx * dx + dy * dy);
-                let min_dist = (self.particles[i].radius + self.particles[j].radius) as f64;
-
-                if dist > 0.0 && dist < min_dist {
-                    // Normal from j to i
-                    let nx = dx / dist;
-                    let ny = dy / dist;
-
-                    // Relative velocity along normal
-                    let rvx = self.particles[i].vel.x - self.particles[j].vel.x;
-                    let rvy = self.particles[i].vel.y - self.particles[j].vel.y;
-                    let rel_vel_along_normal = rvx * nx + rvy * ny;
-
-                    if rel_vel_along_normal < 0.0 {
-                        // compute impulse scalar
-                        let inv_m1 = if self.particles[i].fixed {
-                            0.0
-                        } else {
-                            1.0 / self.particles[i].mass
-                        };
-                        let inv_m2 = if self.particles[j].fixed {
-                            0.0
-                        } else {
-                            1.0 / self.particles[j].mass
-                        };
-                        let impulse =
-                            (-(1.0 + self.restitution) * rel_vel_along_normal) / (inv_m1 + inv_m2);
-
-                        if !self.particles[i].fixed {
-                            self.particles[i].vel.x += impulse * inv_m1 * nx;
-                            self.particles[i].vel.y += impulse * inv_m1 * ny;
-                        }
-                        if !self.particles[j].fixed {
-                            self.particles[j].vel.x -= impulse * inv_m2 * nx;
-                            self.particles[j].vel.y -= impulse * inv_m2 * ny;
-                        }
-                    }
-
-                    // Positional correction to prevent sinking
-                    let penetration = min_dist - dist;
-                    if !self.particles[i].fixed && !self.particles[j].fixed {
-                        let correction = 0.5 * penetration;
-                        self.particles[i].pos.x += nx * correction;
-                        self.particles[i].pos.y += ny * correction;
-                        self.particles[j].pos.x -= nx * correction;
-                        self.particles[j].pos.y -= ny * correction;
-                    } else if self.particles[i].fixed {
-                        self.particles[j].pos.x -= nx * penetration;
-                        self.particles[j].pos.y -= ny * penetration;
-                    } else if self.particles[j].fixed {
-                        self.particles[i].pos.x += nx * penetration;
-                        self.particles[i].pos.y += ny * penetration;
-                    }
-                }
-            }
-        }
-    }
-
     pub fn reset(&mut self) {
-        *self = Universe::new();
+        self.setup_blank(16.0, 9.0);
     }
 
-    // Magnet addition/removal and accessors
-    pub fn add_magnet(
-        &mut self,
-        px: f64,
-        py: f64,
-        angle: f64,
-        size: f32,
-        thickness: f32,
-        mass: f64,
-        color_north: u32,
-        color_south: u32,
-        strength: f64,
-        fixed: bool
-    ) {
-        let m = Magnet::new(
-            px,
-            py,
-            angle,
-            size,
-            thickness,
-            mass,
-            color_north,
-            color_south,
-            strength,
-            fixed
-        );
-        self.magnets.push(m);
-    }
+    // Drawing methods
+    pub fn paint_fluid(&mut self, x: f32, y: f32, brush_size: f32) {
+        if let Some(ref mut f) = self.fluid {
+            let h = f.h;
+            let radius = brush_size / (self.cell_size * 2.0);
 
-    pub fn add_magnet_simple(&mut self, px: f64, py: f64, strength: f64) {
-        let m = Magnet::new_simple(px, py, strength);
-        self.magnets.push(m);
-    }
+            let gi = (x / self.cell_size) as i32;
+            let gj = (y / self.cell_size) as i32;
+            let grid_radius = (radius / h).ceil() as i32;
 
-    // Magnet helpers (reintroduced)
-    pub fn pop_magnet(&mut self) {
-        self.magnets.pop();
-    }
+            for di in -grid_radius..=grid_radius {
+                for dj in -grid_radius..=grid_radius {
+                    let i = (gi + di) as usize;
+                    let j = (gj + dj) as usize;
 
-    pub fn remove_magnet(&mut self, index: usize) {
-        if index < self.magnets.len() {
-            self.magnets.remove(index);
+                    if i >= 1 && i < f.num_x - 1 && j >= 1 && j < f.num_y - 1 {
+                        let n = f.num_y;
+                        let dx = di as f32;
+                        let dy = dj as f32;
+                        let dist_sq = dx * dx + dy * dy;
+                        let r_sq = (grid_radius as f32) * (grid_radius as f32);
+
+                        if dist_sq <= r_sq {
+                            if f.s[i * n + j] != 0.0 {
+                                f.m[i * n + j] = 0.0;
+                            }
+                        }
+                    }
+                }
+            }
         }
     }
 
-    pub fn get_magnets(&self) -> JsValue {
-        serde_wasm_bindgen::to_value(&self.magnets).unwrap()
-    }
+    pub fn paint_wall(&mut self, x: f32, y: f32, brush_size: f32) {
+        if let Some(ref mut f) = self.fluid {
+            let radius = brush_size / (self.cell_size * 2.0);
 
-    pub fn get_magnet(&self, index: usize) -> Option<Magnet> {
-        self.magnets.get(index).cloned()
-    }
+            let gi = (x / self.cell_size) as i32;
+            let gj = (y / self.cell_size) as i32;
+            let grid_radius = radius.ceil() as i32;
 
-    pub fn get_magnet_count(&self) -> i32 {
-        self.magnets.len() as i32
-    }
+            for di in -grid_radius..=grid_radius {
+                for dj in -grid_radius..=grid_radius {
+                    let i = (gi + di) as usize;
+                    let j = (gj + dj) as usize;
 
-    pub fn update_magnet_position(&mut self, index: usize, x: f64, y: f64) {
-        if index < self.magnets.len() {
-            self.magnets[index].pos = Vec2::new(x, y);
+                    if i >= 1 && i < f.num_x - 1 && j >= 1 && j < f.num_y - 1 {
+                        let n = f.num_y;
+                        let dx = di as f32;
+                        let dy = dj as f32;
+                        let dist_sq = dx * dx + dy * dy;
+                        let r_sq = (grid_radius as f32) * (grid_radius as f32);
+
+                        if dist_sq <= r_sq {
+                            // Set cell as solid
+                            f.s[i * n + j] = 0.0;
+                            // Set smoke to 1.0 (no smoke in solid)
+                            f.m[i * n + j] = 1.0;
+                            // Zero velocities at all cell boundaries (staggered grid)
+                            // u is stored at left face of cell, so u[i] and u[i+1] bound this cell
+                            // v is stored at bottom face of cell, so v[j] and v[j+1] bound this cell
+                            f.u[i * n + j] = 0.0;
+                            if i + 1 < f.num_x {
+                                f.u[(i + 1) * n + j] = 0.0;
+                            }
+                            f.v[i * n + j] = 0.0;
+                            if j + 1 < f.num_y {
+                                f.v[i * n + j + 1] = 0.0;
+                            }
+                        }
+                    }
+                }
+            }
         }
     }
 
-    pub fn update_magnet_velocity(&mut self, index: usize, vx: f64, vy: f64) {
-        if index < self.magnets.len() {
-            self.magnets[index].vel = Vec2::new(vx, vy);
+    pub fn erase(&mut self, x: f32, y: f32, brush_size: f32) {
+        if let Some(ref mut f) = self.fluid {
+            let radius = brush_size / (self.cell_size * 2.0);
+
+            let gi = (x / self.cell_size) as i32;
+            let gj = (y / self.cell_size) as i32;
+            let grid_radius = radius.ceil() as i32;
+
+            for di in -grid_radius..=grid_radius {
+                for dj in -grid_radius..=grid_radius {
+                    let i = (gi + di) as usize;
+                    let j = (gj + dj) as usize;
+
+                    if i >= 1 && i < f.num_x - 1 && j >= 1 && j < f.num_y - 1 {
+                        let n = f.num_y;
+                        let dx = di as f32;
+                        let dy = dj as f32;
+                        let dist_sq = dx * dx + dy * dy;
+                        let r_sq = (grid_radius as f32) * (grid_radius as f32);
+
+                        if dist_sq <= r_sq {
+                            f.s[i * n + j] = 1.0;
+                            f.m[i * n + j] = 1.0;
+                            f.u[i * n + j] = 0.0;
+                            f.v[i * n + j] = 0.0;
+                        }
+                    }
+                }
+            }
         }
     }
 
-    pub fn update_magnet_mass(&mut self, index: usize, mass: f64) {
-        if index < self.magnets.len() {
-            self.magnets[index].mass = mass;
+    pub fn clear_particles(&mut self) {
+        if let Some(ref mut f) = self.fluid {
+            f.m.fill(1.0);
         }
     }
 
-    pub fn update_magnet_color_north(&mut self, index: usize, color: u32) {
-        if index < self.magnets.len() {
-            self.magnets[index].color_north = color;
+    pub fn clear_walls(&mut self) {
+        if let Some(ref mut f) = self.fluid {
+            let n = f.num_y;
+            for i in 1..f.num_x - 1 {
+                for j in 1..f.num_y - 1 {
+                    f.s[i * n + j] = 1.0;
+                }
+            }
         }
     }
 
-    pub fn update_magnet_color_south(&mut self, index: usize, color: u32) {
-        if index < self.magnets.len() {
-            self.magnets[index].color_south = color;
-        }
-    }
-
-    pub fn update_magnet_size(&mut self, index: usize, size: f32) {
-        if index < self.magnets.len() {
-            self.magnets[index].size = size;
-        }
-    }
-
-    pub fn update_magnet_thickness(&mut self, index: usize, thickness: f32) {
-        if index < self.magnets.len() {
-            self.magnets[index].thickness = thickness;
-        }
-    }
-
-    pub fn update_magnet_strength(&mut self, index: usize, strength: f64) {
-        if index < self.magnets.len() {
-            self.magnets[index].strength = strength;
-        }
-    }
-
-    pub fn update_magnet_fixed(&mut self, index: usize, fixed: bool) {
-        if index < self.magnets.len() {
-            self.magnets[index].fixed = fixed;
-        }
-    }
-
-    pub fn update_magnet_angle(&mut self, index: usize, angle: f64) {
-        if index < self.magnets.len() {
-            self.magnets[index].angle = angle;
-        }
-    }
-
-    // Particle addition/removal and accessors
-    pub fn add_particle(
-        &mut self,
-        px: f64,
-        py: f64,
-        vx: f64,
-        vy: f64,
-        radius: f32,
-        mass: f64,
-        color: u32,
-        charge: f64
-    ) {
-        let mut particle = Particle::new(px, py, radius, mass, color, vx, vy, charge);
-        // If default charge was set in default_charge, use it when the provided charge is 0
-        if particle.charge == 0.0 {
-            particle.charge = self.default_charge;
-        }
-
-        // If caller didn't specify a color (0), pick color based on charge sign
-        if color == 0 {
-            particle.color = if particle.charge < 0.0 {
-                0x0000ff
-            } else if particle.charge > 0.0 {
-                0xff0000
-            } else {
-                Self::random_color()
-            };
-        }
-
-        self.particles.push(particle);
-    }
-
-    pub fn random_color() -> u32 {
-        let colors = [0xff0000, 0x0000ff, 0x00ff00, 0xf0f000, 0x00f0f0, 0xf000f0];
-        let idx = rand::thread_rng().gen_range(0..colors.len());
-        colors[idx]
-    }
-
-    pub fn add_particle_simple(&mut self, px: f64, py: f64, vx: f64, vy: f64, c: f64) {
-        // Color by charge sign: red = positive, blue = negative, random for neutral
-        let default_color = if c < 0.0 {
-            0x0000ff
-        } else if c > 0.0 {
-            0xff0000
-        } else {
-            Self::random_color()
-        };
-        let default_radius = 10.0;
-
-        let p = Particle::new(px, py, default_radius, self.default_mass, default_color, vx, vy, c);
-        self.particles.push(p);
-    }
-
-    pub fn pop_particle(&mut self) {
-        self.particles.pop();
-    }
-
-    pub fn remove_particle(&mut self, index: usize) {
-        if index < self.particles.len() {
-            self.particles.remove(index);
-        }
-    }
-
+    // Get particles for rendering - now with BLUE color
     pub fn get_particles(&self) -> JsValue {
-        serde_wasm_bindgen::to_value(&self.particles).unwrap()
+        let mut particles: Vec<FluidParticle> = Vec::new();
+
+        if let Some(ref f) = self.fluid {
+            let n = f.num_y;
+
+            for i in 1..f.num_x - 1 {
+                for j in 1..f.num_y - 1 {
+                    let smoke = f.m[i * n + j];
+                    if smoke < 0.99 && f.s[i * n + j] != 0.0 {
+                        let x = ((i as f32) + 0.5) * self.cell_size;
+                        let y = ((j as f32) + 0.5) * self.cell_size;
+
+                        let u = (f.u[i * n + j] + f.u[(i + 1) * n + j]) * 0.5;
+                        let v = (f.v[i * n + j] + f.v[i * n + j + 1]) * 0.5;
+
+                        // Blue color based on smoke density
+                        // More smoke (lower m) = darker blue
+                        let intensity = smoke;
+                        let r = (intensity * 100.0) as u32; // Low red
+                        let g = (intensity * 150.0) as u32; // Medium green
+                        let b = (200.0 + intensity * 55.0) as u32; // High blue (200-255)
+                        let color = (r << 16) | (g << 8) | b | 0xff000000;
+
+                        particles.push(FluidParticle::new(x, y, u * 100.0, v * 100.0, color));
+                    }
+                }
+            }
+        }
+
+        serde_wasm_bindgen::to_value(&particles).unwrap()
     }
 
-    pub fn get_particle(&self, index: usize) -> Option<Particle> {
-        self.particles.get(index).cloned()
+    // Get walls for rendering
+    pub fn get_walls(&self) -> JsValue {
+        let mut walls: Vec<(i32, i32)> = Vec::new();
+
+        if let Some(ref f) = self.fluid {
+            let n = f.num_y;
+
+            for i in 0..f.num_x {
+                for j in 0..f.num_y {
+                    if f.s[i * n + j] == 0.0 {
+                        walls.push((i as i32, j as i32));
+                    }
+                }
+            }
+        }
+
+        serde_wasm_bindgen::to_value(&walls).unwrap()
     }
 
-    pub fn get_particle_count(&self) -> i32 {
-        self.particles.len() as i32
-    }
+    pub fn get_particle_count(&self) -> usize {
+        if let Some(ref f) = self.fluid {
+            let n = f.num_y;
+            let mut count = 0;
 
-    pub fn get_trails(&self) -> JsValue {
-        if self.show_trails {
-            let trails: Vec<Vec<Trail>> = self.particles
-                .iter()
-                .map(|p| p.get_trail())
-                .collect();
-            serde_wasm_bindgen::to_value(&trails).unwrap()
+            for i in 1..f.num_x - 1 {
+                for j in 1..f.num_y - 1 {
+                    if f.m[i * n + j] < 0.99 && f.s[i * n + j] != 0.0 {
+                        count += 1;
+                    }
+                }
+            }
+            count
         } else {
-            let trails: Vec<Vec<Trail>> = vec![];
-            serde_wasm_bindgen::to_value(&trails).unwrap()
+            0
         }
     }
 
-    pub fn get_data(&self) -> JsValue {
-        serde_wasm_bindgen::to_value(&self).unwrap()
+    // Pressure range for color mapping
+    pub fn get_pressure_range(&self) -> Vec<f32> {
+        match &self.fluid {
+            Some(f) => {
+                let mut min_p = f.p[0];
+                let mut max_p = f.p[0];
+                for &p in &f.p {
+                    if p < min_p {
+                        min_p = p;
+                    }
+                    if p > max_p {
+                        max_p = p;
+                    }
+                }
+                vec![min_p, max_p]
+            }
+            None => vec![0.0, 0.0],
+        }
     }
 
-    pub fn set_coulomb_constant(&mut self, k: f64) {
-        self.coulomb_constant = k;
+    // Toggle methods
+    pub fn toggle_pause(&mut self) {
+        self.paused = !self.paused;
+    }
+    pub fn toggle_streamlines(&mut self) {
+        self.show_streamlines = !self.show_streamlines;
+    }
+    pub fn toggle_velocities(&mut self) {
+        self.show_velocities = !self.show_velocities;
+    }
+    pub fn toggle_pressure(&mut self) {
+        self.show_pressure = !self.show_pressure;
+    }
+    pub fn toggle_smoke(&mut self) {
+        self.show_smoke = !self.show_smoke;
+    }
+    pub fn toggle_density(&mut self) {
+        self.show_density = !self.show_density;
+    }
+    pub fn toggle_over_relaxation(&mut self) {
+        if self.over_relaxation == 1.0 {
+            self.over_relaxation = 1.9;
+        } else {
+            self.over_relaxation = 1.0;
+        }
     }
 
-    pub fn get_coulomb_constant(&self) -> f64 {
-        return self.coulomb_constant;
+    // Getters
+    pub fn get_gravity(&self) -> f32 {
+        self.gravity
     }
-    pub fn set_speed(&mut self, speed: f64) {
+    pub fn get_dt(&self) -> f32 {
+        self.dt
+    }
+    pub fn get_num_iters(&self) -> usize {
+        self.num_iters
+    }
+    pub fn get_over_relaxation(&self) -> f32 {
+        self.over_relaxation
+    }
+    pub fn get_is_paused(&self) -> bool {
+        self.paused
+    }
+    pub fn get_scene_nr(&self) -> u8 {
+        self.scene_nr
+    }
+    pub fn get_cell_size(&self) -> f32 {
+        self.cell_size
+    }
+    pub fn get_particle_radius(&self) -> f32 {
+        self.particle_radius
+    }
+    pub fn get_speed(&self) -> f32 {
+        self.speed
+    }
+    pub fn get_implementation(&self) -> Implementation {
+        self.implementation
+    }
+    pub fn get_show_pressure(&self) -> bool {
+        self.show_pressure
+    }
+    pub fn get_show_smoke(&self) -> bool {
+        self.show_smoke
+    }
+    pub fn get_show_density(&self) -> bool {
+        self.show_density
+    }
+    pub fn get_show_streamlines(&self) -> bool {
+        self.show_streamlines
+    }
+    pub fn get_show_velocities(&self) -> bool {
+        self.show_velocities
+    }
+
+    // Setters
+    pub fn set_gravity(&mut self, gravity: f32) {
+        self.gravity = gravity;
+    }
+    pub fn set_dt(&mut self, dt: f32) {
+        self.dt = dt;
+    }
+    pub fn set_num_iters(&mut self, num_iters: usize) {
+        self.num_iters = num_iters;
+    }
+    pub fn set_over_relaxation(&mut self, over_relaxation: f32) {
+        self.over_relaxation = over_relaxation;
+    }
+    pub fn set_is_paused(&mut self, paused: bool) {
+        self.paused = paused;
+    }
+    pub fn set_cell_size(&mut self, size: f32) {
+        self.cell_size = size;
+    }
+    pub fn set_particle_radius(&mut self, radius: f32) {
+        self.particle_radius = radius;
+    }
+    pub fn set_speed(&mut self, speed: f32) {
         self.speed = speed;
     }
-
-    pub fn get_speed(&self) -> f64 {
-        return self.speed;
-    }
-
-    pub fn set_is_paused(&mut self, is_paused: bool) {
-        self.is_paused = is_paused;
-    }
-
-    pub fn get_is_paused(&self) -> bool {
-        return self.is_paused;
-    }
-
     pub fn set_implementation(&mut self, implementation: Implementation) {
         self.implementation = implementation;
     }
-
-    pub fn get_implementation(&self) -> Implementation {
-        return self.implementation;
+    pub fn set_show_density(&mut self, show: bool) {
+        self.show_density = show;
     }
 
-    pub fn set_show_trails(&mut self, show_trails: bool) {
-        self.show_trails = show_trails;
+    // Wind getters/setters
+    pub fn get_wind_x(&self) -> f32 {
+        self.wind_x
+    }
+    pub fn get_wind_y(&self) -> f32 {
+        self.wind_y
+    }
+    pub fn set_wind_x(&mut self, wind_x: f32) {
+        self.wind_x = wind_x;
+    }
+    pub fn set_wind_y(&mut self, wind_y: f32) {
+        self.wind_y = wind_y;
     }
 
-    pub fn get_show_trails(&self) -> bool {
-        return self.show_trails;
+    // Emitter getters/setters
+    pub fn get_emitter_enabled(&self) -> bool {
+        self.emitter_enabled
+    }
+    pub fn get_emitter_x(&self) -> f32 {
+        self.emitter_x
+    }
+    pub fn get_emitter_y(&self) -> f32 {
+        self.emitter_y
+    }
+    pub fn get_emitter_radius(&self) -> f32 {
+        self.emitter_radius
+    }
+    pub fn get_max_particles(&self) -> usize {
+        self.max_particles
+    }
+    pub fn set_emitter_enabled(&mut self, enabled: bool) {
+        self.emitter_enabled = enabled;
+    }
+    pub fn set_emitter_x(&mut self, x: f32) {
+        self.emitter_x = x;
+    }
+    pub fn set_emitter_y(&mut self, y: f32) {
+        self.emitter_y = y;
+    }
+    pub fn set_emitter_radius(&mut self, radius: f32) {
+        self.emitter_radius = radius;
+    }
+    pub fn set_max_particles(&mut self, max: usize) {
+        self.max_particles = max;
+    }
+    pub fn toggle_emitter(&mut self) {
+        self.emitter_enabled = !self.emitter_enabled;
     }
 
-    // New: minimum interaction distance (softening) to avoid singular Coulomb forces
-    pub fn set_min_interaction_distance(&mut self, d: f64) {
-        self.min_interaction_distance = d;
-    }
-
-    pub fn get_min_interaction_distance(&self) -> f64 {
-        self.min_interaction_distance
-    }
-
-    pub fn set_spawn_range(&mut self, r: f64) {
-        self.spawn_range = r;
-    }
-
-    pub fn get_spawn_range(&self) -> f64 {
-        self.spawn_range
-    }
-
-    pub fn set_default_charge(&mut self, charge: f64) {
-        self.default_charge = charge;
-    }
-
-    pub fn get_default_charge(&self) -> f64 {
-        return self.default_charge;
-    }
-
-    pub fn set_default_mass(&mut self, mass: f64) {
-        self.default_mass = mass;
-    }
-
-    pub fn get_default_mass(&self) -> f64 {
-        return self.default_mass;
-    }
-
-    // Toggle whether individual particle mass is used in acceleration calculations
-    pub fn set_mass_calculation(&mut self, mass_calculation: bool) {
-        self.mass_calculation = mass_calculation;
-    }
-
-    pub fn get_mass_calculation(&self) -> bool {
-        return self.mass_calculation;
-    }
-
-    // Quadtree controls (reintroduced)
-    pub fn set_use_quadtree(&mut self, use_quadtree: bool) {
-        self.use_quadtree = use_quadtree;
-    }
-
-    pub fn get_use_quadtree(&self) -> bool {
-        return self.use_quadtree;
-    }
-
-    pub fn toggle_use_quadtree(&mut self) {
-        self.use_quadtree = !self.use_quadtree;
-    }
-
-    pub fn set_quadtree_theta(&mut self, theta: f64) {
-        self.quadtree_theta = theta;
-    }
-
-    pub fn get_quadtree_theta(&self) -> f64 {
-        return self.quadtree_theta;
-    }
-
-    pub fn get_quadtree(&mut self) -> JsValue {
-        if !self.particles.is_empty() {
-            let mut min = Vec2::new(f64::MAX, f64::MAX);
-            let mut max = Vec2::new(f64::MIN, f64::MIN);
-
-            for p in &self.particles {
-                if p.pos.x < min.x {
-                    min.x = p.pos.x;
-                }
-                if p.pos.y < min.y {
-                    min.y = p.pos.y;
-                }
-                if p.pos.x > max.x {
-                    max.x = p.pos.x;
-                }
-                if p.pos.y > max.y {
-                    max.y = p.pos.y;
-                }
-            }
-
-            // Add small padding
-            let padding = 100.0;
-            min = min - Vec2::new(padding, padding);
-            max = max + Vec2::new(padding, padding);
-            let dimensions = max - min;
-            let center = min + dimensions * 0.5;
-            self.quadtree.rebuild(&self.particles, dimensions, center);
-        }
-        serde_wasm_bindgen::to_value(&self.quadtree).unwrap()
-    }
-    pub fn set_use_mass_in_calculation(&mut self, _use_mass: bool) {
-        // Mass is always used for converting force->acceleration in this simulation
-    }
-
-    pub fn get_use_mass_in_calculation(&self) -> bool {
-        return true;
-    }
-
-    // Collisions controls
-    pub fn set_collisions_enabled(&mut self, enabled: bool) {
-        self.collisions_enabled = enabled;
-    }
-
-    pub fn get_collisions_enabled(&self) -> bool {
-        return self.collisions_enabled;
-    }
-
-    pub fn set_restitution(&mut self, r: f64) {
-        self.restitution = r;
-    }
-
-    pub fn get_restitution(&self) -> f64 {
-        return self.restitution;
-    }
-    pub fn update_particle_position(&mut self, index: usize, x: f64, y: f64) {
-        if index < self.particles.len() {
-            self.particles[index].pos = Vec2::new(x, y);
+    // Fluid data access
+    pub fn get_fluid_num_x(&self) -> usize {
+        match &self.fluid {
+            Some(f) => f.num_x,
+            None => 0,
         }
     }
 
-    pub fn update_particle_velocity(&mut self, index: usize, vx: f64, vy: f64) {
-        if index < self.particles.len() {
-            self.particles[index].vel = Vec2::new(vx, vy);
+    pub fn get_fluid_num_y(&self) -> usize {
+        match &self.fluid {
+            Some(f) => f.num_y,
+            None => 0,
         }
     }
 
-    pub fn update_particle_mass(&mut self, index: usize, mass: f64) {
-        if index < self.particles.len() {
-            self.particles[index].mass = mass;
+    pub fn get_fluid_h(&self) -> f32 {
+        match &self.fluid {
+            Some(f) => f.h,
+            None => 0.0,
         }
     }
 
-    pub fn update_particle_charge(&mut self, index: usize, charge: f64) {
-        if index < self.particles.len() {
-            self.particles[index].charge = charge;
+    pub fn sample_field(&self, x: f32, y: f32, field: u8) -> f32 {
+        match &self.fluid {
+            Some(f) => f.sample_field(x, y, field),
+            None => 0.0,
         }
     }
 
-    pub fn update_particle_radius(&mut self, index: usize, radius: f32) {
-        if index < self.particles.len() {
-            self.particles[index].radius = radius;
+    pub fn get_fluid_u(&self, i: usize, j: usize) -> f32 {
+        match &self.fluid {
+            Some(f) => f.get_u(i, j),
+            None => 0.0,
         }
     }
 
-    pub fn update_particle_color(&mut self, index: usize, color: u32) {
-        if index < self.particles.len() {
-            self.particles[index].color = color;
+    pub fn get_fluid_v(&self, i: usize, j: usize) -> f32 {
+        match &self.fluid {
+            Some(f) => f.get_v(i, j),
+            None => 0.0,
         }
     }
 
-    // Update particle fixed state
-    pub fn update_particle_fixed(&mut self, index: usize, fixed: bool) {
-        if index < self.particles.len() {
-            self.particles[index].fixed = fixed;
+    pub fn get_fluid_p(&self, i: usize, j: usize) -> f32 {
+        match &self.fluid {
+            Some(f) => f.get_p(i, j),
+            None => 0.0,
         }
     }
 
-    // NOTE: Particle magnet strength removed; magnets carry strength instead
-}
-
-#[wasm_bindgen]
-#[derive(Serialize, Deserialize, Clone)]
-pub struct Magnet {
-    pub pos: Vec2,
-    pub vel: Vec2,
-    pub acc: Vec2,
-    pub angle: f64, // orientation in radians; +x direction indicates North
-    pub size: f32, // overall length of magnet (distance between pole centers)
-    pub thickness: f32, // visual thickness
-    pub mass: f64,
-    pub color_north: u32,
-    pub color_south: u32,
-    pub strength: f64,
-    pub fixed: bool,
-}
-
-#[wasm_bindgen]
-impl Magnet {
-    #[wasm_bindgen(constructor)]
-    pub fn new(
-        px: f64,
-        py: f64,
-        angle: f64,
-        size: f32,
-        thickness: f32,
-        mass: f64,
-        color_north: u32,
-        color_south: u32,
-        strength: f64,
-        fixed: bool
-    ) -> Magnet {
-        Magnet {
-            pos: Vec2::new(px, py),
-            vel: Vec2::new(0.0, 0.0),
-            acc: Vec2::new(0.0, 0.0),
-            angle,
-            size,
-            thickness,
-            mass,
-            color_north,
-            color_south,
-            strength,
-            fixed,
+    pub fn get_fluid_s(&self, i: usize, j: usize) -> f32 {
+        match &self.fluid {
+            Some(f) => f.get_s(i, j),
+            None => 0.0,
         }
     }
 
-    pub fn new_simple(px: f64, py: f64, strength: f64) -> Magnet {
-        Magnet {
-            pos: Vec2::new(px, py),
-            vel: Vec2::new(0.0, 0.0),
-            acc: Vec2::new(0.0, 0.0),
-            angle: 0.0,
-            size: 60.0,
-            thickness: 20.0,
-            mass: 1.0,
-            color_north: 0xff0000,
-            color_south: 0x0000ff,
-            strength,
-            fixed: true,
+    pub fn get_fluid_m(&self, i: usize, j: usize) -> f32 {
+        match &self.fluid {
+            Some(f) => f.get_m(i, j),
+            None => 0.0,
         }
     }
 
     pub fn get_data(&self) -> JsValue {
         serde_wasm_bindgen::to_value(&self).unwrap()
-    }
-
-    pub fn is_fixed(&self) -> bool {
-        self.fixed
-    }
-    pub fn set_fixed(&mut self, f: bool) {
-        self.fixed = f;
-    }
-}
-
-// Add quadtree acceleration method within an impl Universe block
-impl Universe {
-    fn calculate_electrostatic_accelerations_quadtree(&mut self) -> Vec<Vec2> {
-        let n = self.particles.len();
-        let mut accelerations = vec![Vec2::new(0.0, 0.0); n];
-
-        if n == 0 {
-            return accelerations;
-        }
-
-        // Rebuild quadtree
-        let mut min = Vec2::new(f64::MAX, f64::MAX);
-        let mut max = Vec2::new(f64::MIN, f64::MIN);
-
-        for p in &self.particles {
-            if p.pos.x < min.x {
-                min.x = p.pos.x;
-            }
-            if p.pos.y < min.y {
-                min.y = p.pos.y;
-            }
-            if p.pos.x > max.x {
-                max.x = p.pos.x;
-            }
-            if p.pos.y > max.y {
-                max.y = p.pos.y;
-            }
-        }
-
-        // Add small padding
-        let padding = 100.0;
-        min = min - Vec2::new(padding, padding);
-        max = max + Vec2::new(padding, padding);
-        let dimensions = max - min;
-        let center = min + dimensions * 0.5;
-
-        self.quadtree.rebuild(&self.particles, dimensions, center);
-
-        for i in 0..n {
-            let pos2d = Vec2::new(self.particles[i].pos.x, self.particles[i].pos.y);
-            let particle_mass = if self.mass_calculation {
-                self.particles[i].mass
-            } else {
-                self.default_mass
-            };
-            // Inline recursive quadtree evaluation to compute acceleration
-            fn rec(
-                quad: &QuadTreeNode,
-                particle_pos: Vec2,
-                particle_charge: f64,
-                particle_mass: f64,
-                theta: f64,
-                coulomb_constant: f64,
-                min_interaction_distance: f64
-            ) -> Vec2 {
-                if quad.charge == 0.0 {
-                    return Vec2::new(0.0, 0.0);
-                }
-                let dx = quad.center_of_charge.x - particle_pos.x;
-                let dy = quad.center_of_charge.y - particle_pos.y;
-                let distance = f64::sqrt(dx * dx + dy * dy);
-                if distance < 1e-10 {
-                    return Vec2::new(0.0, 0.0);
-                }
-                let size = f64::max(quad.dimensions.x, quad.dimensions.y);
-                let ratio = size / distance;
-
-                if ratio < theta || quad.children.is_none() {
-                    let distance_squared = distance * distance;
-                    let min_dist = min_interaction_distance;
-                    let min_dist_sq = min_dist * min_dist;
-                    let safe_distance_squared = if distance_squared < min_dist_sq {
-                        min_dist_sq
-                    } else {
-                        distance_squared
-                    };
-                    let safe_distance = f64::sqrt(safe_distance_squared);
-                    let force_magnitude =
-                        (coulomb_constant * quad.charge * particle_charge) / safe_distance_squared;
-                    let acc_magnitude = force_magnitude / particle_mass;
-                    let unit_x = (particle_pos.x - quad.center_of_charge.x) / safe_distance;
-                    let unit_y = (particle_pos.y - quad.center_of_charge.y) / safe_distance;
-                    Vec2::new(acc_magnitude * unit_x, acc_magnitude * unit_y)
-                } else {
-                    let mut acc = Vec2::new(0.0, 0.0);
-                    if let Some(children) = &quad.children {
-                        for child in children.iter() {
-                            acc += rec(
-                                child,
-                                particle_pos,
-                                particle_charge,
-                                particle_mass,
-                                theta,
-                                coulomb_constant,
-                                min_interaction_distance
-                            );
-                        }
-                    }
-                    acc
-                }
-            }
-
-            let acc2d = rec(
-                &self.quadtree,
-                pos2d,
-                self.particles[i].charge,
-                particle_mass,
-                self.quadtree_theta,
-                self.coulomb_constant,
-                self.min_interaction_distance
-            );
-            accelerations[i].x = acc2d.x;
-            accelerations[i].y = acc2d.y;
-        }
-
-        // Include magnet dipole contributions
-        for i in 0..n {
-            let qi = self.particles[i].charge;
-            let mi = if self.mass_calculation { self.particles[i].mass } else { self.default_mass };
-            for m in &self.magnets {
-                let half = (m.size as f64) * 0.5;
-                let ux = f64::cos(m.angle);
-                let uy = f64::sin(m.angle);
-                let north = Vec2::new(m.pos.x + ux * half, m.pos.y + uy * half);
-                let south = Vec2::new(m.pos.x - ux * half, m.pos.y - uy * half);
-                let pole_n = m.strength * 0.5;
-                let pole_s = -m.strength * 0.5;
-
-                // North pole
-                {
-                    let rx = self.particles[i].pos.x - north.x;
-                    let ry = self.particles[i].pos.y - north.y;
-                    let dist_sq = rx * rx + ry * ry;
-                    let min_dist = self.min_interaction_distance;
-                    let min_dist_sq = min_dist * min_dist;
-                    let safe_dist_sq = if dist_sq < min_dist_sq { min_dist_sq } else { dist_sq };
-                    let dist = f64::sqrt(safe_dist_sq);
-                    if dist > 1e-8 {
-                        let force_magnitude = (self.coulomb_constant * qi * pole_n) / safe_dist_sq;
-                        let acc_magnitude = force_magnitude / mi;
-                        accelerations[i].x += acc_magnitude * (rx / dist);
-                        accelerations[i].y += acc_magnitude * (ry / dist);
-                    }
-                }
-
-                // South pole
-                {
-                    let rx = self.particles[i].pos.x - south.x;
-                    let ry = self.particles[i].pos.y - south.y;
-                    let dist_sq = rx * rx + ry * ry;
-                    let min_dist = self.min_interaction_distance;
-                    let min_dist_sq = min_dist * min_dist;
-                    let safe_dist_sq = if dist_sq < min_dist_sq { min_dist_sq } else { dist_sq };
-                    let dist = f64::sqrt(safe_dist_sq);
-                    if dist > 1e-8 {
-                        let force_magnitude = (self.coulomb_constant * qi * pole_s) / safe_dist_sq;
-                        let acc_magnitude = force_magnitude / mi;
-                        accelerations[i].x += acc_magnitude * (rx / dist);
-                        accelerations[i].y += acc_magnitude * (ry / dist);
-                    }
-                }
-            }
-        }
-
-        accelerations
     }
 }

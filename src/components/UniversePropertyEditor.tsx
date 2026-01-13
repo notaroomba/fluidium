@@ -3,12 +3,8 @@ import { useState, useRef, useEffect } from "react";
 import { useSimulation } from "../contexts/SimulationContext";
 
 export default function UniversePropertyEditor() {
-  const {
-    universe,
-    isUniverseEditorOpen,
-    setIsUniverseEditorOpen,
-    setRender,
-  } = useSimulation();
+  const { universe, isUniverseEditorOpen, setIsUniverseEditorOpen, setRender } =
+    useSimulation();
 
   const [position, setPosition] = useState({
     x: window.innerWidth - 420,
@@ -22,31 +18,45 @@ export default function UniversePropertyEditor() {
 
   // Local state for input values
   const [gravity, setGravity] = useState(universe.get_gravity().toFixed(2));
+  const [dt, setDt] = useState((universe.get_dt() * 1000).toFixed(1));
+  const [numIters, setNumIters] = useState(universe.get_num_iters().toString());
+  const [overRelaxation, setOverRelaxation] = useState(
+    universe.get_over_relaxation().toFixed(2)
+  );
+  const [particleRadius, setParticleRadius] = useState(
+    universe.get_particle_radius().toFixed(1)
+  );
+  const [cellSize, setCellSize] = useState(universe.get_cell_size().toFixed(0));
+
+  // Wind state
   const [windX, setWindX] = useState(universe.get_wind_x());
   const [windY, setWindY] = useState(universe.get_wind_y());
   const [windXValue, setWindXValue] = useState(universe.get_wind_x().toFixed(2));
   const [windYValue, setWindYValue] = useState(universe.get_wind_y().toFixed(2));
-  const [speed, setSpeed] = useState(universe.get_speed().toFixed(2));
-  const [flipRatio, setFlipRatio] = useState(universe.get_flip_ratio().toFixed(2));
-  const [particleRadius, setParticleRadius] = useState(universe.get_particle_radius().toFixed(1));
-  const [cellSize, setCellSize] = useState(universe.get_cell_size().toFixed(0));
-
-  // Canvas interaction state
   const [isDraggingWind, setIsDraggingWind] = useState(false);
+
+  // Emitter state
+  const [emitterEnabled, setEmitterEnabled] = useState(universe.get_emitter_enabled());
+  const [emitterRadius, setEmitterRadius] = useState(universe.get_emitter_radius().toFixed(2));
+  const [maxParticles, setMaxParticles] = useState(universe.get_max_particles().toString());
 
   // Update local values when universe changes
   useEffect(() => {
     if (!isEditing) {
       setGravity(universe.get_gravity().toFixed(2));
-      setWindXValue(universe.get_wind_x().toFixed(2));
-      setWindYValue(universe.get_wind_y().toFixed(2));
-      setSpeed(universe.get_speed().toFixed(2));
-      setFlipRatio(universe.get_flip_ratio().toFixed(2));
+      setDt((universe.get_dt() * 1000).toFixed(1));
+      setNumIters(universe.get_num_iters().toString());
+      setOverRelaxation(universe.get_over_relaxation().toFixed(2));
       setParticleRadius(universe.get_particle_radius().toFixed(1));
       setCellSize(universe.get_cell_size().toFixed(0));
+      setWindXValue(universe.get_wind_x().toFixed(2));
+      setWindYValue(universe.get_wind_y().toFixed(2));
+      setEmitterRadius(universe.get_emitter_radius().toFixed(2));
+      setMaxParticles(universe.get_max_particles().toString());
     }
     setWindX(universe.get_wind_x());
     setWindY(universe.get_wind_y());
+    setEmitterEnabled(universe.get_emitter_enabled());
   }, [universe, isEditing]);
 
   // Draw wind vector canvas
@@ -59,7 +69,7 @@ export default function UniversePropertyEditor() {
 
     const centerX = canvas.width / 2;
     const centerY = canvas.height / 2;
-    const scale = 0.5; // pixels per unit
+    const scale = 20; // pixels per unit
 
     // Clear canvas
     ctx.clearRect(0, 0, canvas.width, canvas.height);
@@ -149,7 +159,7 @@ export default function UniversePropertyEditor() {
 
     const centerX = canvas.width / 2;
     const centerY = canvas.height / 2;
-    const scale = 0.5;
+    const scale = 20;
 
     const newWindX = (x - centerX) / scale;
     const newWindY = -(y - centerY) / scale; // Flip Y back
@@ -205,23 +215,17 @@ export default function UniversePropertyEditor() {
         universe.set_gravity(value);
         setGravity(value.toFixed(2));
         break;
-      case "windX":
-        universe.set_wind_x(value);
-        setWindX(value);
-        setWindXValue(value.toFixed(2));
+      case "dt":
+        universe.set_dt(value / 1000); // Convert from ms to seconds
+        setDt(value.toFixed(1));
         break;
-      case "windY":
-        universe.set_wind_y(value);
-        setWindY(value);
-        setWindYValue(value.toFixed(2));
+      case "numIters":
+        universe.set_num_iters(Math.floor(value));
+        setNumIters(Math.floor(value).toString());
         break;
-      case "speed":
-        universe.set_speed(value);
-        setSpeed(value.toFixed(2));
-        break;
-      case "flipRatio":
-        universe.set_flip_ratio(value);
-        setFlipRatio(value.toFixed(2));
+      case "overRelaxation":
+        universe.set_over_relaxation(value);
+        setOverRelaxation(value.toFixed(2));
         break;
       case "particleRadius":
         universe.set_particle_radius(value);
@@ -230,6 +234,22 @@ export default function UniversePropertyEditor() {
       case "cellSize":
         universe.set_cell_size(value);
         setCellSize(value.toFixed(0));
+        break;
+      case "windX":
+        universe.set_wind_x(value);
+        setWindX(value);
+        break;
+      case "windY":
+        universe.set_wind_y(value);
+        setWindY(value);
+        break;
+      case "emitterRadius":
+        universe.set_emitter_radius(value);
+        setEmitterRadius(value.toFixed(2));
+        break;
+      case "maxParticles":
+        universe.set_max_particles(Math.floor(value));
+        setMaxParticles(Math.floor(value).toString());
         break;
     }
     setRender((prev) => prev + 1);
@@ -292,8 +312,8 @@ export default function UniversePropertyEditor() {
           <canvas
             ref={canvasRef}
             width={352}
-            height={200}
-            className="border border-gray-300 rounded cursor-crosshair"
+            height={150}
+            className="border border-gray-300 rounded cursor-crosshair w-full"
             onMouseDown={handleCanvasMouseDown}
             onMouseMove={handleCanvasMouseMove}
             onMouseUp={handleCanvasMouseUp}
@@ -307,7 +327,7 @@ export default function UniversePropertyEditor() {
         {/* Wind X */}
         <div className="space-y-1">
           <label className="text-sm font-medium text-gray-700">
-            Wind X:
+            Wind X (m/s):
           </label>
           <input
             type="text"
@@ -323,12 +343,13 @@ export default function UniversePropertyEditor() {
             onBlur={() => setIsEditing(null)}
             className="w-full px-3 py-2 text-base border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
           />
+          <span className="text-xs text-gray-500">Default: 2.0 (flow from left)</span>
         </div>
 
         {/* Wind Y */}
         <div className="space-y-1">
           <label className="text-sm font-medium text-gray-700">
-            Wind Y:
+            Wind Y (m/s):
           </label>
           <input
             type="text"
@@ -344,116 +365,226 @@ export default function UniversePropertyEditor() {
             onBlur={() => setIsEditing(null)}
             className="w-full px-3 py-2 text-base border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
           />
+          <span className="text-xs text-gray-500">Default: 0 (horizontal flow)</span>
         </div>
 
-        {/* Gravity */}
-        <div className="space-y-1">
-          <label className="text-sm font-medium text-gray-700">
-            Gravity:
-          </label>
-          <input
-            type="text"
-            value={gravity}
-            onChange={(e) => {
-              setIsEditing("gravity");
-              setGravity(e.target.value);
-              const val = parseFloat(e.target.value);
-              if (!isNaN(val)) {
-                handlePropertyUpdate("gravity", val);
-              }
-            }}
-            onBlur={() => setIsEditing(null)}
-            className="w-full px-3 py-2 text-base border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
-          />
-          <span className="text-xs text-gray-500">Default: -200 (downward)</span>
-        </div>
+        {/* Emitter Section */}
+        <div className="border-t border-gray-200 pt-3 mt-3">
+          <div className="flex items-center justify-between mb-2">
+            <label className="text-sm font-medium text-gray-700">
+              Particle Emitter
+            </label>
+            <button
+              onClick={() => {
+                const newValue = !emitterEnabled;
+                setEmitterEnabled(newValue);
+                universe.set_emitter_enabled(newValue);
+                setRender((prev) => prev + 1);
+              }}
+              className={`px-3 py-1 rounded text-sm transition-all duration-200 ${
+                emitterEnabled
+                  ? "bg-blue-500 text-white"
+                  : "bg-gray-200 text-gray-700"
+              }`}
+            >
+              {emitterEnabled ? "ON" : "OFF"}
+            </button>
+          </div>
 
-        {/* Simulation Speed */}
-        <div className="space-y-1">
-          <label className="text-sm font-medium text-gray-700">
-            Simulation Speed:
-          </label>
-          <input
-            type="text"
-            value={speed}
-            onChange={(e) => {
-              setIsEditing("speed");
-              setSpeed(e.target.value);
-              const val = parseFloat(e.target.value);
-              if (!isNaN(val) && val > 0) {
-                handlePropertyUpdate("speed", val);
-              }
-            }}
-            onBlur={() => setIsEditing(null)}
-            className="w-full px-3 py-2 text-base border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
-          />
-        </div>
+          {/* Emitter Radius */}
+          <div className="space-y-1">
+            <label className="text-sm font-medium text-gray-700">
+              Emitter Radius:
+            </label>
+            <input
+              type="text"
+              value={emitterRadius}
+              onChange={(e) => {
+                setIsEditing("emitterRadius");
+                setEmitterRadius(e.target.value);
+                const val = parseFloat(e.target.value);
+                if (!isNaN(val) && val > 0) {
+                  handlePropertyUpdate("emitterRadius", val);
+                }
+              }}
+              onBlur={() => setIsEditing(null)}
+              className="w-full px-3 py-2 text-base border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
+            />
+            <span className="text-xs text-gray-500">Default: 0.1 (10% of domain height)</span>
+          </div>
 
-        {/* FLIP Ratio */}
-        <div className="space-y-1">
-          <label className="text-sm font-medium text-gray-700">
-            FLIP Ratio (0 = PIC, 1 = FLIP):
-          </label>
-          <input
-            type="range"
-            min="0"
-            max="1"
-            step="0.05"
-            value={flipRatio}
-            onChange={(e) => {
-              const val = parseFloat(e.target.value);
-              handlePropertyUpdate("flipRatio", val);
-            }}
-            className="w-full h-2 bg-gray-200 rounded-lg appearance-none cursor-pointer"
-          />
-          <div className="flex justify-between text-xs text-gray-500">
-            <span>PIC (Smooth)</span>
-            <span>{flipRatio}</span>
-            <span>FLIP (Splashy)</span>
+          {/* Max Particles */}
+          <div className="space-y-1 mt-2">
+            <label className="text-sm font-medium text-gray-700">
+              Max Particles:
+            </label>
+            <input
+              type="text"
+              value={maxParticles}
+              onChange={(e) => {
+                setIsEditing("maxParticles");
+                setMaxParticles(e.target.value);
+                const val = parseInt(e.target.value);
+                if (!isNaN(val) && val > 0) {
+                  handlePropertyUpdate("maxParticles", val);
+                }
+              }}
+              onBlur={() => setIsEditing(null)}
+              className="w-full px-3 py-2 text-base border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
+            />
+            <span className="text-xs text-gray-500">Default: 10000</span>
           </div>
         </div>
 
-        {/* Particle Radius */}
-        <div className="space-y-1">
-          <label className="text-sm font-medium text-gray-700">
-            Particle Radius:
+        {/* Simulation Settings Section */}
+        <div className="border-t border-gray-200 pt-3 mt-3">
+          <label className="text-sm font-medium text-gray-700 block mb-2">
+            Simulation Settings
           </label>
-          <input
-            type="text"
-            value={particleRadius}
-            onChange={(e) => {
-              setIsEditing("particleRadius");
-              setParticleRadius(e.target.value);
-              const val = parseFloat(e.target.value);
-              if (!isNaN(val) && val > 0) {
-                handlePropertyUpdate("particleRadius", val);
-              }
-            }}
-            onBlur={() => setIsEditing(null)}
-            className="w-full px-3 py-2 text-base border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
-          />
+
+          {/* Gravity */}
+          <div className="space-y-1">
+            <label className="text-sm font-medium text-gray-700">Gravity:</label>
+            <input
+              type="text"
+              value={gravity}
+              onChange={(e) => {
+                setIsEditing("gravity");
+                setGravity(e.target.value);
+                const val = parseFloat(e.target.value);
+                if (!isNaN(val)) {
+                  handlePropertyUpdate("gravity", val);
+                }
+              }}
+              onBlur={() => setIsEditing(null)}
+              className="w-full px-3 py-2 text-base border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
+            />
+            <span className="text-xs text-gray-500">
+              Default: 0 (wind tunnel), -9.81 for gravity
+            </span>
+          </div>
+
+          {/* Time Step */}
+          <div className="space-y-1 mt-2">
+            <label className="text-sm font-medium text-gray-700">
+              Time Step (ms):
+            </label>
+            <input
+              type="text"
+              value={dt}
+              onChange={(e) => {
+                setIsEditing("dt");
+                setDt(e.target.value);
+                const val = parseFloat(e.target.value);
+                if (!isNaN(val) && val > 0) {
+                  handlePropertyUpdate("dt", val);
+                }
+              }}
+              onBlur={() => setIsEditing(null)}
+              className="w-full px-3 py-2 text-base border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
+            />
+            <span className="text-xs text-gray-500">
+              Smaller = more accurate but slower
+            </span>
+          </div>
+
+          {/* Solver Iterations */}
+          <div className="space-y-1 mt-2">
+            <label className="text-sm font-medium text-gray-700">
+              Solver Iterations:
+            </label>
+            <input
+              type="text"
+              value={numIters}
+              onChange={(e) => {
+                setIsEditing("numIters");
+                setNumIters(e.target.value);
+                const val = parseInt(e.target.value);
+                if (!isNaN(val) && val > 0) {
+                  handlePropertyUpdate("numIters", val);
+                }
+              }}
+              onBlur={() => setIsEditing(null)}
+              className="w-full px-3 py-2 text-base border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
+            />
+            <span className="text-xs text-gray-500">
+              More iterations = more accurate pressure solve
+            </span>
+          </div>
+
+          {/* Over-Relaxation */}
+          <div className="space-y-1 mt-2">
+            <label className="text-sm font-medium text-gray-700">
+              Over-Relaxation:
+            </label>
+            <input
+              type="range"
+              min="1.0"
+              max="2.0"
+              step="0.1"
+              value={overRelaxation}
+              onChange={(e) => {
+                const val = parseFloat(e.target.value);
+                handlePropertyUpdate("overRelaxation", val);
+              }}
+              className="w-full h-2 bg-gray-200 rounded-lg appearance-none cursor-pointer"
+            />
+            <div className="flex justify-between text-xs text-gray-500">
+              <span>1.0 (Stable)</span>
+              <span>{overRelaxation}</span>
+              <span>2.0 (Fast)</span>
+            </div>
+          </div>
         </div>
 
-        {/* Cell Size */}
-        <div className="space-y-1">
-          <label className="text-sm font-medium text-gray-700">
-            Grid Cell Size:
+        {/* Rendering Settings Section */}
+        <div className="border-t border-gray-200 pt-3 mt-3">
+          <label className="text-sm font-medium text-gray-700 block mb-2">
+            Rendering Settings
           </label>
-          <input
-            type="text"
-            value={cellSize}
-            onChange={(e) => {
-              setIsEditing("cellSize");
-              setCellSize(e.target.value);
-              const val = parseFloat(e.target.value);
-              if (!isNaN(val) && val > 0) {
-                handlePropertyUpdate("cellSize", val);
-              }
-            }}
-            onBlur={() => setIsEditing(null)}
-            className="w-full px-3 py-2 text-base border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
-          />
-          <span className="text-xs text-gray-500">Affects simulation resolution</span>
+
+          {/* Particle Radius */}
+          <div className="space-y-1">
+            <label className="text-sm font-medium text-gray-700">
+              Particle Radius:
+            </label>
+            <input
+              type="text"
+              value={particleRadius}
+              onChange={(e) => {
+                setIsEditing("particleRadius");
+                setParticleRadius(e.target.value);
+                const val = parseFloat(e.target.value);
+                if (!isNaN(val) && val > 0) {
+                  handlePropertyUpdate("particleRadius", val);
+                }
+              }}
+              onBlur={() => setIsEditing(null)}
+              className="w-full px-3 py-2 text-base border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
+            />
+          </div>
+
+          {/* Cell Size */}
+          <div className="space-y-1 mt-2">
+            <label className="text-sm font-medium text-gray-700">
+              Grid Cell Size:
+            </label>
+            <input
+              type="text"
+              value={cellSize}
+              onChange={(e) => {
+                setIsEditing("cellSize");
+                setCellSize(e.target.value);
+                const val = parseFloat(e.target.value);
+                if (!isNaN(val) && val > 0) {
+                  handlePropertyUpdate("cellSize", val);
+                }
+              }}
+              onBlur={() => setIsEditing(null)}
+              className="w-full px-3 py-2 text-base border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
+            />
+            <span className="text-xs text-gray-500">Affects rendering scale</span>
+          </div>
         </div>
       </div>
     </div>

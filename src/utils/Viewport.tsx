@@ -13,10 +13,10 @@ class ViewportWrapper extends BaseViewport {
       // events is the only required argument to the constructor.
       events: app.renderer.events,
     });
-    //get url ane if its at root then disable drag and pan
+    // Only enable drag/pan on simulation page, use middle mouse button
     const url = new URL(window.location.href);
     if (url.pathname !== "/") {
-      this.drag({ mouseButtons: "left" }).pinch().wheel().decelerate();
+      this.drag({ mouseButtons: "middle" }).pinch().wheel().decelerate();
     }
   }
 }

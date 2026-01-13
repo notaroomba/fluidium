@@ -28,6 +28,9 @@ interface SimulationContextType {
   setShowGrid: (show: boolean) => void;
   showVelocity: boolean;
   setShowVelocity: (show: boolean) => void;
+  // Scene selection
+  sceneNr: number;
+  setSceneNr: (scene: number) => void;
 }
 
 const SimulationContext = createContext<SimulationContextType | undefined>(
@@ -65,6 +68,9 @@ export function SimulationProvider({
   const [showGrid, setShowGrid] = useState(false);
   const [showVelocity, setShowVelocity] = useState(false);
 
+  // Scene selection - default to wind tunnel (1)
+  const [sceneNr, setSceneNr] = useState(1);
+
   useEffect(() => {
     universe.set_is_paused(isPaused);
 
@@ -93,6 +99,8 @@ export function SimulationProvider({
         setShowGrid,
         showVelocity,
         setShowVelocity,
+        sceneNr,
+        setSceneNr,
       }}
     >
       {children}
